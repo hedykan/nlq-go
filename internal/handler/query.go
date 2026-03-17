@@ -1,0 +1,260 @@
+package handler
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/channelwill/nlq/internal/database"
+	"github.com/channelwill/nlq/internal/knowledge"
+	"github.com/channelwill/nlq/internal/llm"
+	"github.com/channelwill/nlq/internal/sql"
+	"gorm.io/gorm"
+)
+
+// QueryHandler 查询处理器
+type QueryHandler struct {
+	db         *gorm.DB
+	parser     *database.SchemaParser
+	executor   *sql.Executor
+	llmClient  LLMClient
+	useRealLLM bool
+}
+
+// LLMClient LLM客户端接口
+type LLMClient interface {
+	GenerateSQL(ctx context.Context, schema, question string) (string, error)
+	GenerateContent(ctx context.Context, systemPrompt, userPrompt string) (string, error)
+	IsAvailable() bool
+}
+
+// NewQueryHandler 创建查询处理器（已废弃，强制使用LLM模式）
+func NewQueryHandler(db *gorm.DB) *QueryHandler {
+	// 创建一个不可用的处理器，强制用户配置LLM
+	handler := &QueryHandler{
+		db:         db,
+		parser:     database.NewSchemaParser(db),
+		executor:   sql.NewExecutor(db),
+		useRealLLM: false,
+		llmClient:  nil, // 明确设置为nil，强制要求LLM
+	}
+
+	return handler
+}
+
+// NewQueryHandlerWithLLM 创建带LLM的查询处理器（强制要求API Key）
+func NewQueryHandlerWithLLM(db *gorm.DB, apiKey, baseURL string) *QueryHandler {
+	handler := &QueryHandler{
+		db:         db,
+		parser:     database.NewSchemaParser(db),
+		executor:   sql.NewExecutor(db),
+		useRealLLM: false, // 将在下面设置
+	}
+
+	// 强制要求有效的API Key
+	if apiKey == "" || apiKey == "your-api-key-here" || apiKey == "${GLM_API_KEY}" {
+		// 不设置llmClient，强制要求配置API Key
+		handler.useRealLLM = false
+		return handler
+	}
+
+	// 创建真实的GLM客户端
+	handler.llmClient = llm.NewGLMClient(apiKey, baseURL)
+	handler.useRealLLM = true
+
+	return handler
+}
+
+// NewTwoPhaseQueryHandlerWithLLM 创建两阶段查询处理器（推荐用于大型数据库）
+func NewTwoPhaseQueryHandlerWithLLM(db *gorm.DB, apiKey, baseURL string) *TwoPhaseQueryHandler {
+	// 创建Schema解析器
+	parser := database.NewSchemaParser(db)
+
+	// 强制要求有效的API Key
+	if apiKey == "" || apiKey == "your-api-key-here" || apiKey == "${GLM_API_KEY}" {
+		// 返回一个无效的处理器
+		return &TwoPhaseQueryHandler{
+			db:        parser,
+			llmClient: nil,
+		}
+	}
+
+	// 创建真实的GLM客户端
+	llmClient := llm.NewGLMClient(apiKey, baseURL)
+
+	// 创建两阶段处理器
+	return NewTwoPhaseQueryHandler(parser, db, llmClient)
+}
+
+// QueryResult 查询结果
+type QueryResult struct {
+	Question           string                 `json:"question"`
+	SQL                string                 `json:"sql"`
+	Result             *sql.ExecuteResult     `json:"result,omitempty"`
+	Error              string                 `json:"error,omitempty"`
+	Duration           time.Duration          `json:"duration"`
+	Metadata           map[string]interface{} `json:"metadata,omitempty"`
+	FieldClarification *FieldClarification     `json:"field_clarification,omitempty"` // 字段澄清信息
+}
+
+// Handle 处理自然语言查询（简化版本）
+func (h *QueryHandler) Handle(ctx context.Context, question string) (*QueryResult, error) {
+	start := time.Now()
+
+	result := &QueryResult{
+		Question: question,
+		Metadata: make(map[string]interface{}),
+	}
+
+	// 1. 首先检查LLM客户端（强制要求，放在最前面以便测试）
+	if h.llmClient == nil {
+		result.Error = "NLQ服务需要配置GLM API Key才能使用"
+		result.Metadata["error_type"] = "no_llm_client"
+		return result, fmt.Errorf("NLQ服务需要配置GLM API Key才能使用")
+	}
+
+	if !h.llmClient.IsAvailable() {
+		result.Error = "LLM客户端不可用，请检查API Key配置"
+		result.Metadata["error_type"] = "llm_unavailable"
+		return result, fmt.Errorf("LLM客户端不可用，请检查API Key配置")
+	}
+
+	// 2. 解析Schema
+	schema, err := h.parser.FormatForPrompt()
+	if err != nil {
+		result.Error = fmt.Sprintf("解析Schema失败: %v", err)
+		return result, err
+	}
+
+	// 3. 使用LLM生成SQL（强制要求LLM模式）
+	var generatedSQL string
+
+	if !h.llmClient.IsAvailable() {
+		result.Error = "LLM客户端不可用，请检查API Key配置"
+		result.Metadata["error_type"] = "llm_unavailable"
+		return result, fmt.Errorf("LLM客户端不可用，请检查API Key配置")
+	}
+
+	// 使用真实的LLM客户端
+	result.Metadata["llm_type"] = "GLM-4-Plus"
+	result.Metadata["use_real_llm"] = true
+
+	generatedSQL, err = h.llmClient.GenerateSQL(ctx, schema, question)
+	if err != nil {
+		result.Error = fmt.Sprintf("LLM生成SQL失败: %v", err)
+		result.Metadata["error_type"] = "llm_generation_failed"
+		return result, err
+	}
+
+	result.SQL = generatedSQL
+	result.Metadata["sql_generated"] = true
+
+	// 4. 验证SQL
+	if err := h.executor.ValidateOnly(generatedSQL); err != nil {
+		result.Error = fmt.Sprintf("SQL验证失败: %v", err)
+		return result, err
+	}
+
+	// 5. 执行SQL
+	execResult, err := h.executor.Execute(ctx, generatedSQL)
+	if err != nil {
+		result.Error = fmt.Sprintf("执行SQL失败: %v", err)
+		return result, err
+	}
+
+	result.Result = execResult
+	result.Duration = time.Since(start)
+
+	return result, nil
+}
+
+// HandleWithSQL 直接使用SQL查询
+func (h *QueryHandler) HandleWithSQL(ctx context.Context, sqlQuery string) (*QueryResult, error) {
+	start := time.Now()
+
+	result := &QueryResult{
+		SQL:      sqlQuery,
+		Metadata: make(map[string]interface{}),
+	}
+
+	// 验证SQL
+	if err := h.executor.ValidateOnly(sqlQuery); err != nil {
+		result.Error = fmt.Sprintf("SQL验证失败: %v", err)
+		return result, err
+	}
+
+	// 执行SQL
+	execResult, err := h.executor.Execute(ctx, sqlQuery)
+	if err != nil {
+		result.Error = fmt.Sprintf("执行SQL失败: %v", err)
+		return result, err
+	}
+
+	result.Result = execResult
+	result.Duration = time.Since(start)
+
+	return result, nil
+}
+
+// generateSQLSimple 简化的SQL生成逻辑（已废弃，现在强制使用LLM模式）
+// 注意：此方法已不再使用，所有查询都必须通过LLM
+func (h *QueryHandler) generateSQLSimple(question, schema string) (string, error) {
+	// 简化模式已移除，强制要求使用LLM
+	return "", fmt.Errorf("简化SQL生成已禁用，必须配置GLM API Key才能使用NLQ服务")
+}
+
+// extractTableName 从问题中提取表名
+func (h *QueryHandler) extractTableName(question string) string {
+	// 常见表名列表
+	commonTables := []string{
+		"boom_user", "boom_customer", "boom_order_paid_water",
+		"boom_product", "boom_member", "boom_plan",
+	}
+
+	for _, table := range commonTables {
+		if strings.Contains(question, table) {
+			return table
+		}
+	}
+
+	return ""
+}
+
+// GetSchema 获取数据库Schema
+func (h *QueryHandler) GetSchema() (string, error) {
+	return h.parser.FormatForPrompt()
+}
+
+// GetTableList 获取表列表
+func (h *QueryHandler) GetTableList() ([]database.TableSchema, error) {
+	return h.parser.ParseSchema()
+}
+
+// GetTableInfo 获取表信息
+func (h *QueryHandler) GetTableInfo(tableName string) (database.TableSchema, error) {
+	return h.parser.ParseTable(tableName)
+}
+
+// SetKnowledge 设置知识库文档
+func (h *QueryHandler) SetKnowledge(docs []knowledge.Document) error {
+	// 检查LLM客户端是否支持知识库
+	if h.llmClient == nil {
+		return fmt.Errorf("LLM客户端未初始化")
+	}
+
+	// 尝试将知识库设置到LLM客户端
+	if glmClient, ok := h.llmClient.(*llm.GLMClient); ok {
+		glmClient.SetKnowledge(docs)
+		return nil
+	}
+
+	return fmt.Errorf("LLM客户端不支持知识库功能")
+}
+
+// QueryHandlerInterface 查询处理器接口（用于依赖注入和测试）
+type QueryHandlerInterface interface {
+	Handle(ctx context.Context, question string) (*QueryResult, error)
+	HandleWithSQL(ctx context.Context, sqlQuery string) (*QueryResult, error)
+	SetKnowledge(docs []knowledge.Document) error
+}

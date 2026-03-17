@@ -1,0 +1,68 @@
+{
+  "examples": [
+    {
+      "id": "time_sort_001",
+      "type": "time_sort",
+      "question": "查询100个最早的用户的username",
+      "sql": "SELECT username FROM boom_user ORDER BY created_at ASC LIMIT 100",
+      "tables": ["boom_user"],
+      "field_hints": ["created_at", "username"]
+    },
+    {
+      "id": "time_sort_002",
+      "type": "time_sort",
+      "question": "查询100个最早的用户的shop_name",
+      "sql": "SELECT shop_name FROM boom_user ORDER BY created_at ASC LIMIT 100",
+      "tables": ["boom_user"],
+      "field_hints": ["created_at", "shop_name"]
+    },
+    {
+      "id": "time_sort_003",
+      "type": "time_sort",
+      "question": "最近注册的VIP用户",
+      "sql": "SELECT * FROM boom_user WHERE level = 'C' ORDER BY created_at DESC LIMIT 100",
+      "tables": ["boom_user"],
+      "field_hints": ["created_at", "level"]
+    },
+    {
+      "id": "field_query_001",
+      "type": "field_query",
+      "question": "查询VIP用户的数量",
+      "sql": "SELECT COUNT(*) as total FROM boom_user WHERE level = 'C'",
+      "tables": ["boom_user"],
+      "field_hints": ["level", "COUNT"]
+    },
+    {
+      "id": "field_query_002",
+      "type": "field_query",
+      "question": "查询所有用户的用户名和店铺名称",
+      "sql": "SELECT username, shop_name FROM boom_user",
+      "tables": ["boom_user"],
+      "field_hints": ["username", "shop_name"]
+    },
+    {
+      "id": "field_query_003",
+      "type": "field_query",
+      "question": "查询用户的email和手机号",
+      "sql": "SELECT email, mobile FROM boom_user LIMIT 100",
+      "tables": ["boom_user"],
+      "field_hints": ["email", "mobile"]
+    },
+    {
+      "id": "aggregation_001",
+      "type": "aggregation",
+      "question": "统计每个VIP等级的用户数量",
+      "sql": "SELECT level, COUNT(*) as count FROM boom_user GROUP BY level",
+      "tables": ["boom_user"],
+      "field_hints": ["level", "COUNT", "GROUP BY"]
+    },
+    {
+      "id": "aggregation_002",
+      "type": "aggregation",
+      "question": "查询用户总数",
+      "sql": "SELECT COUNT(*) as total FROM boom_user",
+      "tables": ["boom_user"],
+      "field_hints": ["COUNT"]
+    }
+  ]
+}
