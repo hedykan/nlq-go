@@ -2,18 +2,26 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/channelwill/nlq/internal/feedback"
 	"github.com/channelwill/nlq/internal/handler"
 	"github.com/channelwill/nlq/internal/knowledge"
 )
 
 // QueryHandler 查询请求处理器
 type QueryHandler struct {
-	queryHandler QueryHandlerInterface
-	enableCORS   bool
+	queryHandler     QueryHandlerInterface
+	enableCORS       bool
+	feedbackStorage  feedback.Storage
+	feedbackHandler  *FeedbackHandler // 用于自动记录错误
 }
 
 // QueryHandlerInterface 查询处理器接口（用于测试）
@@ -45,6 +53,17 @@ type QueryResponse struct {
 	DurationMs int64                  `json:"duration_ms"`
 	Error      string                 `json:"error,omitempty"`
 	Metadata   map[string]interface{} `json:"metadata,omitempty"`
+
+	// 新增：反馈相关字段
+	QueryID  string        `json:"query_id,omitempty"`  // 查询唯一标识
+	Feedback *FeedbackLinks `json:"feedback,omitempty"` // 反馈链接
+}
+
+// FeedbackLinks 反馈链接结构
+type FeedbackLinks struct {
+	PositiveURL string `json:"positive_url"` // 符合预期链接
+	NegativeURL string `json:"negative_url"` // 不符合预期链接
+	ExpiresAt   int64  `json:"expires_at"`   // 链接过期时间(Unix时间戳)
 }
 
 // ErrorResponse 错误响应
@@ -72,16 +91,28 @@ type StatusResponse struct {
 // NewQueryHandler 创建查询处理器
 func NewQueryHandler(queryHandler QueryHandlerInterface) *QueryHandler {
 	return &QueryHandler{
-		queryHandler: queryHandler,
-		enableCORS:   true,
+		queryHandler:    queryHandler,
+		enableCORS:      true,
+		feedbackStorage: feedback.NewMockStorage(),
 	}
 }
 
 // NewQueryHandlerWithHandler 直接使用QueryHandler创建（与NewQueryHandler功能相同）
 func NewQueryHandlerWithHandler(h QueryHandlerInterface) *QueryHandler {
 	return &QueryHandler{
-		queryHandler: h,
-		enableCORS:   true,
+		queryHandler:    h,
+		enableCORS:      true,
+		feedbackStorage: feedback.NewMockStorage(),
+	}
+}
+
+// NewQueryHandlerWithFeedback 创建带反馈存储的查询处理器
+func NewQueryHandlerWithFeedback(h QueryHandlerInterface, storage feedback.Storage, feedbackHandler *FeedbackHandler) *QueryHandler {
+	return &QueryHandler{
+		queryHandler:     h,
+		enableCORS:       true,
+		feedbackStorage:  storage,
+		feedbackHandler:  feedbackHandler,
 	}
 }
 
@@ -122,9 +153,52 @@ func (h *QueryHandler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	result, err := h.queryHandler.Handle(ctx, request.Question)
 
 	if err != nil {
+		// 如果执行错误，自动记录到负面反馈池
+		if h.feedbackHandler != nil {
+			errorMsg := err.Error()
+			failedSQL := ""
+
+			// 尝试从错误信息中提取SQL
+			if strings.Contains(errorMsg, "SQL:") {
+				parts := strings.SplitN(errorMsg, "SQL:", 2)
+				if len(parts) > 1 {
+					// SQL: 后面的内容可能包含多行，需要完整保留
+					failedSQL = strings.TrimLeft(parts[1], " \n")
+					// 只取第一行作为错误描述的其余部分
+					if idx := strings.Index(failedSQL, "\n"); idx != -1 {
+						// 如果SQL中有换行，只取到错误信息为止
+						errorMsg = strings.TrimSpace(parts[0])
+					} else {
+						// SQL单行，分开错误和SQL
+						errorMsg = strings.TrimSpace(parts[0])
+					}
+				}
+			}
+
+			// 如果提取到了SQL，记录错误
+			if failedSQL != "" {
+				go h.feedbackHandler.RecordExecutionError(request.Question, failedSQL, errorMsg)
+			}
+		}
 		h.sendErrorResponse(w, "查询失败: "+err.Error(), "query_failed", http.StatusInternalServerError)
 		return
 	}
+
+	// 生成QueryID
+	queryID := GenerateQueryID()
+
+	// 存储查询上下文（供反馈使用）
+	queryContext := &feedback.QueryContext{
+		QueryID:   queryID,
+		Question:  result.Question,
+		SQL:       result.SQL,
+		Timestamp: time.Now(),
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	if result.Result != nil {
+		queryContext.Result = result.Result.Rows
+	}
+	_ = h.feedbackStorage.SetQueryContext(queryContext) // 忽略错误，不阻止查询
 
 	// 构建响应
 	response := QueryResponse{
@@ -133,6 +207,8 @@ func (h *QueryHandler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 		SQL:        result.SQL,
 		DurationMs: result.Duration.Milliseconds(),
 		Metadata:   result.Metadata,
+		QueryID:    queryID,
+		Feedback:   h.generateFeedbackLinks(queryID, r),
 	}
 
 	// 转换结果数据（检查Result是否为nil）
@@ -220,6 +296,44 @@ func (h *QueryHandler) Status(w http.ResponseWriter, r *http.Request) {
 	h.sendJSONResponse(w, response, http.StatusOK)
 }
 
+// HandleRecordError 处理来自CLI的错误记录请求
+func (h *QueryHandler) HandleRecordError(w http.ResponseWriter, r *http.Request) {
+	// 设置CORS头
+	h.setCORSHeaders(w)
+
+	// 处理OPTIONS请求
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// 只允许POST请求
+	if r.Method != http.MethodPost {
+		h.sendErrorResponse(w, "方法不允许", "method_not_allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 解析请求
+	var request struct {
+		Question  string `json:"question"`
+		SQL       string `json:"sql"`
+		ErrorMsg  string `json:"error_msg"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		h.sendErrorResponse(w, "无效的JSON请求", "invalid_json", http.StatusBadRequest)
+		return
+	}
+
+	// 记录错误
+	if h.feedbackHandler != nil && request.Question != "" && request.SQL != "" {
+		go h.feedbackHandler.RecordExecutionError(request.Question, request.SQL, request.ErrorMsg)
+	}
+
+	// 返回成功（异步处理，不等待完成）
+	h.sendJSONResponse(w, map[string]bool{"success": true}, http.StatusOK)
+}
+
 // setCORSHeaders 设置CORS头
 func (h *QueryHandler) setCORSHeaders(w http.ResponseWriter) {
 	if h.enableCORS {
@@ -269,4 +383,66 @@ func (h *QueryHandler) loadKnowledgeBase(knowledgePath string) error {
 	}
 
 	return nil
+}
+
+// getLocalIP 获取本机IP地址
+func getLocalIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "localhost"
+	}
+
+	for _, addr := range addrs {
+		// 检查是否是IP地址
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				// 返回第一个找到的非回环IPv4地址
+				return ipnet.IP.String()
+			}
+		}
+	}
+
+	return "localhost"
+}
+
+// getServerPort 获取服务器端口
+func getServerPort() string {
+	return "8080"
+}
+
+// generateFeedbackLinks 生成反馈链接（使用本机IP）
+func (h *QueryHandler) generateFeedbackLinks(queryID string, r *http.Request) *FeedbackLinks {
+	// 使用本机IP和固定端口
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+
+	localIP := getLocalIP()
+	port := getServerPort()
+	host := fmt.Sprintf("%s:%s", localIP, port)
+
+	baseURL := fmt.Sprintf("%s://%s", scheme, host)
+
+	return &FeedbackLinks{
+		PositiveURL: fmt.Sprintf("%s/feedback/positive/%s", baseURL, queryID),
+		NegativeURL: fmt.Sprintf("%s/feedback/negative/%s", baseURL, queryID),
+		ExpiresAt:   time.Now().Add(24 * time.Hour).Unix(),
+	}
+}
+
+// GenerateQueryID 生成查询唯一标识
+// 格式: qry_{YYYYMMDD}_{随机8位字符}
+func GenerateQueryID() string {
+	date := time.Now().Format("20060102")
+
+	// 生成8位随机字符
+	randomBytes := make([]byte, 4)
+	if _, err := rand.Read(randomBytes); err != nil {
+		// 如果随机生成失败，使用时间戳
+		return fmt.Sprintf("qry_%s_%d", date, time.Now().UnixNano()%100000000)
+	}
+	randomStr := hex.EncodeToString(randomBytes)[:8]
+
+	return fmt.Sprintf("qry_%s_%s", date, randomStr)
 }

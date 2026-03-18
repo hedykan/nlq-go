@@ -11,6 +11,7 @@ import (
 	"github.com/channelwill/nlq/internal/config"
 	"github.com/channelwill/nlq/internal/database"
 	"github.com/channelwill/nlq/internal/handler"
+	"github.com/channelwill/nlq/internal/knowledge"
 	"github.com/channelwill/nlq/internal/server"
 )
 
@@ -51,6 +52,14 @@ func main() {
 	// 使用两阶段处理器（推荐用于大型数据库）
 	queryHandler := handler.NewTwoPhaseQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL)
 	fmt.Printf("🤖 使用两阶段查询处理器 + GLM4.7 LLM: %s\n", cfg.LLM.Model)
+
+	// 自动加载知识库
+	if err := loadKnowledgeBases(queryHandler); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  加载知识库失败: %v\n", err)
+		// 继续启动，知识库加载失败不应阻止服务器启动
+	} else {
+		fmt.Println("✅ 知识库加载成功")
+	}
 
 	// 创建HTTP服务器
 	srv, err := server.NewServer(cfg, queryHandler)
@@ -125,4 +134,45 @@ func loadConfig() (*config.Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// loadKnowledgeBases 自动加载所有知识库
+func loadKnowledgeBases(queryHandler handler.QueryHandlerInterface) error {
+	loader := knowledge.NewLoader()
+
+	// 定义要加载的知识库目录
+	knowledgeDirs := []string{
+		"knowledge",           // 主知识库目录
+		"knowledge/positive",  // 正面反馈知识库
+		"knowledge/negative",  // 负面反馈知识库
+	}
+
+	var allDocs []knowledge.Document
+
+	// 加载所有知识库目录
+	for _, dir := range knowledgeDirs {
+		docs, err := loader.LoadFromDirectory(dir)
+		if err != nil {
+			// 目录不存在或无法读取，继续尝试其他目录
+			fmt.Printf("  ⚠️  跳过 %s: %v\n", dir, err)
+			continue
+		}
+
+		if len(docs) > 0 {
+			fmt.Printf("  📚 从 %s 加载了 %d 个文档\n", dir, len(docs))
+			allDocs = append(allDocs, docs...)
+		}
+	}
+
+	// 如果有文档，设置到查询处理器
+	if len(allDocs) > 0 {
+		if err := queryHandler.SetKnowledge(allDocs); err != nil {
+			return fmt.Errorf("设置知识库到查询处理器失败: %w", err)
+		}
+		fmt.Printf("  ✅ 总共加载 %d 个知识库文档\n", len(allDocs))
+	} else {
+		fmt.Println("  📭 未找到知识库文档")
+	}
+
+	return nil
 }

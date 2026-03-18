@@ -4,18 +4,22 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/channelwill/nlq/internal/feedback"
 	"github.com/gorilla/websocket"
 )
 
 // WebSocketServer WebSocket服务器
 type WebSocketServer struct {
-	upgrader websocket.Upgrader
-	clients  map[*websocket.Conn]bool
-	mutex    sync.RWMutex
-	handler  QueryHandlerInterface
+	upgrader        websocket.Upgrader
+	clients         map[*websocket.Conn]bool
+	mutex           sync.RWMutex
+	handler         QueryHandlerInterface
+	feedbackStorage feedback.Storage
 }
 
 // WebSocketMessage WebSocket消息
@@ -34,9 +38,15 @@ func NewWebSocketServer(queryHandler QueryHandlerInterface) *WebSocketServer {
 				return true // 允许所有来源
 			},
 		},
-		clients: make(map[*websocket.Conn]bool),
-		handler: queryHandler,
+		clients:         make(map[*websocket.Conn]bool),
+		handler:         queryHandler,
+		feedbackStorage: feedback.NewMockStorage(),
 	}
+}
+
+// SetFeedbackStorage 设置反馈存储
+func (ws *WebSocketServer) SetFeedbackStorage(storage feedback.Storage) {
+	ws.feedbackStorage = storage
 }
 
 // HandleWebSocket 处理WebSocket连接
@@ -93,6 +103,8 @@ func (ws *WebSocketServer) handleMessage(conn *websocket.Conn, message WebSocket
 	switch message.Type {
 	case "query":
 		ws.handleQuery(conn, message)
+	case "feedback":
+		ws.handleFeedback(conn, message)
 	case "ping":
 		ws.handlePing(conn)
 	case "status":
@@ -134,7 +146,23 @@ func (ws *WebSocketServer) handleQuery(conn *websocket.Conn, message WebSocketMe
 		return
 	}
 
-	// 发送结果
+	// 生成QueryID
+	queryID := GenerateQueryID()
+
+	// 存储查询上下文（供反馈使用）
+	queryContext := &feedback.QueryContext{
+		QueryID:   queryID,
+		Question:  result.Question,
+		SQL:       result.SQL,
+		Timestamp: time.Now(),
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	if result.Result != nil {
+		queryContext.Result = result.Result.Rows
+	}
+	_ = ws.feedbackStorage.SetQueryContext(queryContext) // 忽略错误，不阻止查询
+
+	// 发送结果（包含反馈链接）
 	response := WebSocketMessage{
 		Type: "result",
 		Data: map[string]interface{}{
@@ -145,6 +173,12 @@ func (ws *WebSocketServer) handleQuery(conn *websocket.Conn, message WebSocketMe
 			"count":      result.Result.Count,
 			"durationMs": result.Duration.Milliseconds(),
 			"metadata":   result.Metadata,
+			"query_id":   queryID,
+			"feedback": map[string]interface{}{
+				"message":    "如果结果符合预期，请发送 feedback 消息，type 为 'positive' 或 'negative'",
+				"query_id":   queryID,
+				"expires_at": time.Now().Add(24 * time.Hour).Unix(),
+			},
 		},
 	}
 
@@ -153,6 +187,69 @@ func (ws *WebSocketServer) handleQuery(conn *websocket.Conn, message WebSocketMe
 	}
 
 	ws.sendMessage(conn, response)
+}
+
+// handleFeedback 处理反馈消息
+func (ws *WebSocketServer) handleFeedback(conn *websocket.Conn, message WebSocketMessage) {
+	// 提取必需字段
+	queryID, ok := message.Data["query_id"].(string)
+	if !ok || queryID == "" {
+		ws.sendError(conn, "query_id 不能为空")
+		return
+	}
+
+	// 提取反馈类型
+	feedbackType, ok := message.Data["type"].(string)
+	if !ok || (feedbackType != "positive" && feedbackType != "negative") {
+		ws.sendError(conn, "type 必须是 'positive' 或 'negative'")
+		return
+	}
+
+	// 提取可选字段
+	userComment := ""
+	if comment, ok := message.Data["comment"].(string); ok {
+		userComment = comment
+	}
+
+	correctSQL := ""
+	if sql, ok := message.Data["correct_sql"].(string); ok {
+		correctSQL = sql
+	}
+
+	// 创建反馈请求
+	req := feedback.FeedbackRequest{
+		QueryID:     queryID,
+		IsPositive:  feedbackType == "positive",
+		UserComment: userComment,
+		CorrectSQL:  correctSQL,
+	}
+
+	// 创建收集器并收集反馈
+	collector := feedback.NewCollector(ws.feedbackStorage)
+	if err := collector.Collect(req); err != nil {
+		ws.sendError(conn, fmt.Sprintf("提交反馈失败: %v", err))
+		return
+	}
+
+	// 获取查询上下文（用于写入文件）
+	context, _ := ws.feedbackStorage.GetQueryContext(queryID)
+
+	// 异步写入 pending pool 文件
+	go func() {
+		if err := appendToPendingPoolFile(queryID, context, req.IsPositive, userComment, correctSQL); err != nil {
+			fmt.Printf("写入 pending pool 失败: %v\n", err)
+		}
+	}()
+
+	// 发送成功响应
+	ws.sendMessage(conn, WebSocketMessage{
+		Type: "feedback_received",
+		Data: map[string]interface{}{
+			"success": true,
+			"message": "反馈已收到，感谢您的反馈！",
+			"query_id": queryID,
+		},
+	})
 }
 
 // handlePing 处理ping消息
@@ -211,4 +308,53 @@ func (ws *WebSocketServer) GetClientCount() int {
 	ws.mutex.RLock()
 	defer ws.mutex.RUnlock()
 	return len(ws.clients)
+}
+
+// appendToPendingPoolFile 将反馈追加到 pending pool 文件（辅助函数）
+func appendToPendingPoolFile(queryID string, context *feedback.QueryContext, isPositive bool, userComment, correctSQL string) error {
+	if context == nil {
+		return fmt.Errorf("查询上下文为空")
+	}
+
+	// 确定目标文件
+	var targetFile string
+	if isPositive {
+		targetFile = "knowledge/positive/positive_pool.md"
+	} else {
+		targetFile = "knowledge/negative/negative_pool.md"
+	}
+
+	// 格式化条目
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	var builder strings.Builder
+
+	builder.WriteString("\n---\n")
+	builder.WriteString(fmt.Sprintf("**提交时间**: %s\n", timestamp))
+	builder.WriteString(fmt.Sprintf("**QueryID**: %s\n", queryID))
+	builder.WriteString(fmt.Sprintf("**问题**: %s\n", context.Question))
+	builder.WriteString(fmt.Sprintf("**生成的SQL**: %s\n", context.SQL))
+
+	if userComment != "" {
+		builder.WriteString(fmt.Sprintf("**用户备注**: %s\n", userComment))
+	}
+
+	if correctSQL != "" {
+		builder.WriteString(fmt.Sprintf("**正确的SQL**: %s\n", correctSQL))
+	}
+
+	builder.WriteString("\n")
+
+	// 打开文件（追加模式）
+	f, err := os.OpenFile(targetFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("打开文件失败: %w", err)
+	}
+	defer f.Close()
+
+	// 写入条目
+	if _, err := f.WriteString(builder.String()); err != nil {
+		return fmt.Errorf("写入文件失败: %w", err)
+	}
+
+	return nil
 }

@@ -97,6 +97,26 @@ func LoadFromEnv() (*Config, error) {
 	return cfg, nil
 }
 
+// LoadConfig 加载配置（优先从文件，其次环境变量+默认值）
+func LoadConfig(configFile string) (*Config, error) {
+	// 尝试从配置文件加载
+	if configFile != "" {
+		cfg, err := LoadFromFile(configFile)
+		if err == nil {
+			return cfg, nil
+		}
+		// 文件加载失败，继续尝试环境变量
+	}
+
+	// 从环境变量加载
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		return nil, err
+	}
+
+	return cfg, nil
+}
+
 // SetDefaults 设置默认值
 func (c *Config) SetDefaults() {
 	// 数据库默认值

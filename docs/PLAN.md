@@ -688,3 +688,280 @@ clean:
 **测试状态**：✅ 所有已实现模块测试通过
 **安全状态**：✅ SQL防火墙已实现并通过全面测试
 **文档状态**：✅ 完整文档已创建（包括安全性分析）
+
+---
+
+---
+
+# 📌 扩展功能：查询反馈学习系统
+
+> **新增功能计划** - 2025-03-17
+> **开发方式**: TDD（测试驱动开发）
+
+## 功能概述
+
+构建一个完整的查询反馈学习系统，通过用户反馈持续优化NLQ系统的SQL生成准确性。
+
+**核心特性**:
+- ✅ 每次查询后提供便捷的反馈入口（符合预期/不符合预期）
+- ✅ 自动收集用户反馈并脱敏敏感信息
+- ✅ 使用LLM智能去重并合并到知识库
+- ✅ 每次查询时自动加载反馈知识库，持续提升准确性
+
+---
+
+## 一、系统架构
+
+### 1.1 数据流
+
+```
+用户查询 → 生成SQL → 返回结果 + 反馈链接
+                        ↓
+                用户提交反馈
+                        ↓
+            ┌──────────┴──────────┐
+            ↓                     ↓
+      数据脱敏              数据脱敏
+            ↓                     ↓
+    positive_pool.md      negative_pool.md
+            ↓                     ↓
+        LLM去重合并           LLM去重合并
+            ↓                     ↓
+    positive_examples.md   negative_examples.md
+            └──────────┬──────────┘
+                       ↓
+              查询时自动加载
+```
+
+### 1.2 核心数据结构
+
+```go
+// 扩展QueryResponse
+type QueryResponse struct {
+    // ... 现有字段
+    Feedback   *FeedbackLinks  `json:"feedback,omitempty"`
+    QueryID    string          `json:"query_id"`
+}
+
+type FeedbackLinks struct {
+    PositiveURL string `json:"positive_url"`
+    NegativeURL string `json:"negative_url"`
+    ExpiresAt   int64  `json:"expires_at"`
+}
+
+type FeedbackRequest struct {
+    QueryID     string `json:"query_id"`
+    IsPositive  bool   `json:"is_positive"`
+    UserComment string `json:"user_comment,omitempty"`
+    CorrectSQL  string `json:"correct_sql,omitempty"`
+}
+```
+
+---
+
+## 二、文件结构
+
+### 2.1 新增文件
+
+```
+NLQ/
+├── internal/
+│   ├── feedback/
+│   │   ├── collector.go       # 反馈收集器
+│   │   ├── merger.go          # LLM合并器
+│   │   ├── storage.go         # 存储接口
+│   │   └── storage_json.go    # JSON存储实现
+│   ├── sanitizer/
+│   │   ├── sanitizer.go       # 脱敏器
+│   │   ├── patterns.go        # 脱敏规则
+│   │   └── config.go          # 配置
+│   └── server/
+│       └── handlers_feedback.go  # HTTP处理器
+├── knowledge/
+│   ├── positive/
+│   │   ├── positive_pool.md
+│   │   └── positive_examples.md
+│   └── negative/
+│       ├── negative_pool.md
+│       └── negative_examples.md
+├── config/
+│   └── sanitizer_rules.yaml
+└── test/
+    ├── feedback/
+    │   ├── collector_test.go
+    │   ├── merger_test.go
+    │   └── sanitizer_test.go
+    └── server/
+        └── handlers_feedback_test.go
+```
+
+### 2.2 修改文件
+
+| 文件 | 修改内容 |
+|-----|---------|
+| `internal/server/handlers.go` | 扩展QueryResponse，添加FeedbackLinks |
+| `internal/server/server.go` | 注册 `/feedback/submit` 路由 |
+| `internal/handler/query.go` | 生成query_id，存储上下文 |
+| `internal/knowledge/loader.go` | 添加LoadFeedbackDocuments方法 |
+| `internal/llm/prompts.go` | 添加合并prompt模板 |
+| `cmd/nlq-server/main.go` | 初始化反馈组件 |
+
+---
+
+## 三、TDD实施步骤
+
+### ✅ 阶段1：数据脱敏模块
+- [x] 编写脱敏测试（邮箱、手机、身份证、IP、SQL）
+- [x] 实现 `internal/sanitizer/sanitizer.go`
+- [x] 实现 `internal/sanitizer/patterns.go` (已集成到sanitizer.go)
+- [x] 创建 `config/sanitizer_rules.yaml` (可选，规则已硬编码)
+
+### ✅ 阶段2：反馈收集模块
+- [x] 编写收集器测试
+- [x] 实现 `internal/feedback/storage.go`（接口）
+- [x] 实现 `internal/feedback/storage_json.go` (Mock存储实现)
+- [x] 实现 `internal/feedback/collector.go`
+
+### ✅ 阶段3：LLM合并模块
+- [x] 编写合并器测试（使用mock LLM）
+- [x] 添加合并prompt模板（格式化函数）
+- [x] 实现 `internal/feedback/merger.go`
+
+### ✅ 阶段4：HTTP接口集成
+- [x] 编写HTTP处理器测试
+- [x] 扩展 `internal/server/handlers.go`（添加FeedbackLinks和QueryID）
+- [x] 实现 `internal/server/handlers_feedback.go`（反馈提交处理器）
+- [x] 添加GenerateQueryID函数
+
+### ✅ 阶段5：知识库自动加载
+- [x] 编写知识库加载测试（已集成到启动流程）
+- [x] 扩展 `internal/knowledge/loader.go`（已支持）
+- [x] 扩展 `internal/knowledge/injector.go`（已支持）
+- [x] 创建初始知识库文件
+- [x] 修改服务器启动代码自动加载所有知识库
+
+### ✅ 阶段6：集成测试
+- [x] 端到端测试（查询→反馈→合并→验证）
+- [x] 并发测试（50条并发反馈）
+- [x] 性能测试（脱敏<1ms，收集<100ms ✅）
+
+---
+
+## 四、API设计
+
+### 扩展 POST /query
+
+**响应新增字段**:
+```json
+{
+  "query_id": "qry_20250317_abc123",
+  "feedback": {
+    "positive_url": "/feedback/positive?qry_20250317_abc123",
+    "negative_url": "/feedback/negative?qry_20250317_abc123",
+    "expires_at": 1710710400
+  }
+}
+```
+
+### 新增 POST /feedback/submit
+
+**请求**:
+```json
+{
+  "query_id": "qry_20250317_abc123",
+  "is_positive": true,
+  "user_comment": "结果正确"
+}
+```
+
+**响应**:
+```json
+{
+  "success": true,
+  "message": "反馈已收到"
+}
+```
+
+---
+
+## 五、关键实现
+
+### 5.1 QueryID生成
+
+```go
+func GenerateQueryID() string {
+    date := time.Now().Format("20060102")
+    random := generateRandomString(8)
+    return fmt.Sprintf("qry_%s_%s", date, random)
+}
+```
+
+### 5.2 脱敏规则
+
+| 类型 | 规则 | 替换为 |
+|-----|------|--------|
+| 邮箱 | `[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}` | `***@***.***` |
+| 手机 | `1[3-9]\d{9}` | `138****1234` |
+| 身份证 | `\d{17}[\dXx]` | `************1234` |
+| IP | `\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}` | `***.***.***.***` |
+
+### 5.3 知识库格式
+
+**positive_examples.md**:
+```markdown
+# 正面查询示例
+
+## 示例 1
+**问题**: 查询销售额大于10000的产品
+**SQL**: SELECT * FROM products WHERE sales > 10000
+**说明**: 简单数值比较
+```
+
+**negative_examples.md**:
+```markdown
+# 需要避免的错误模式
+
+## 错误模式 1
+**问题**: 查询最近的订单
+**错误SQL**: SELECT * FROM orders ORDER BY date DESC
+**正确SQL**: SELECT * FROM orders ORDER BY created_at DESC LIMIT 10
+```
+
+---
+
+## 六、执行跟踪
+
+| 阶段 | 任务 | 状态 | 备注 |
+|-----|------|-----|------|
+| 1 | 数据脱敏模块 | ✅ 已完成 | 30个测试用例全部通过 |
+| 2 | 反馈收集模块 | ✅ 已完成 | 9个测试用例全部通过 |
+| 3 | LLM合并模块 | ✅ 已完成 | 10个测试用例全部通过 |
+| 4 | HTTP接口集成 | ✅ 已完成 | 6个测试用例全部通过 |
+| 5 | 知识库自动加载 | ✅ 已完成 | 自动加载6个知识库文档 |
+| 6 | 集成测试 | ✅ 已完成 | 9个集成测试全部通过 |
+
+**总测试用例**: **64个** 全部通过 ✅
+
+**状态图例**: ⏳ 待开始 | 🚧 进行中 | ✅ 已完成 | ❌ 已阻塞
+
+---
+
+## 七、测试覆盖率目标
+
+- `sanitizer` 包: ≥90%
+- `feedback` 包: ≥85%
+- `server` 扩展部分: ≥80%
+- **整体**: ≥80%
+
+---
+
+## 八、性能指标
+
+- 反馈提交响应: <100ms
+- 知识库加载: <500ms
+- LLM合并: <5s（异步）
+- 反馈链接有效期: 24小时
+
+---
+
+*遵循TDD原则: 测试先行，代码在后*

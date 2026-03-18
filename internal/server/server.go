@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/channelwill/nlq/internal/config"
+	"github.com/channelwill/nlq/internal/feedback"
 	"github.com/gorilla/mux"
 )
 
@@ -16,6 +17,7 @@ type Server struct {
 	server          *http.Server
 	queryHandler    *QueryHandler
 	wsServer        *WebSocketServer
+	feedbackHandler *FeedbackHandler
 	config          *config.Config
 }
 
@@ -24,18 +26,26 @@ func NewServer(cfg *config.Config, dbHandler QueryHandlerInterface) (*Server, er
 	// 创建路由器
 	router := mux.NewRouter()
 
-	// 创建查询处理器
-	queryHandler := NewQueryHandlerWithHandler(dbHandler)
+	// 创建共享的反馈存储
+	feedbackStorage := feedback.NewMockStorage()
 
-	// 创建WebSocket服务器
+	// 创建反馈处理器（使用共享的反馈存储）
+	feedbackHandler := NewFeedbackHandler(feedbackStorage)
+
+	// 创建查询处理器（使用共享的反馈存储和反馈处理器）
+	queryHandler := NewQueryHandlerWithFeedback(dbHandler, feedbackStorage, feedbackHandler)
+
+	// 创建WebSocket服务器（使用共享的反馈存储）
 	wsServer := NewWebSocketServer(dbHandler)
+	wsServer.SetFeedbackStorage(feedbackStorage)
 
 	// 配置路由
 	server := &Server{
-		router:       router,
-		queryHandler: queryHandler,
-		wsServer:     wsServer,
-		config:       cfg,
+		router:          router,
+		queryHandler:    queryHandler,
+		wsServer:        wsServer,
+		feedbackHandler: feedbackHandler,
+		config:          cfg,
 	}
 
 	server.setupRoutes(router)
@@ -64,6 +74,9 @@ func (s *Server) setupRoutes(router *mux.Router) {
 	api.HandleFunc("/query", s.queryHandler.HandleQuery).Methods("POST", "OPTIONS")
 	api.HandleFunc("/sql", s.queryHandler.HandleSQL).Methods("POST", "OPTIONS")
 
+	// 错误记录
+	api.HandleFunc("/record-error", s.queryHandler.HandleRecordError).Methods("POST", "OPTIONS")
+
 	// Schema相关
 	api.HandleFunc("/schema", s.handleGetSchema).Methods("GET")
 	api.HandleFunc("/schema/{table}", s.handleGetTableSchema).Methods("GET")
@@ -71,6 +84,13 @@ func (s *Server) setupRoutes(router *mux.Router) {
 	// 健康检查和状态
 	api.HandleFunc("/health", s.queryHandler.HealthCheck).Methods("GET")
 	api.HandleFunc("/status", s.queryHandler.Status).Methods("GET")
+
+	// 反馈相关
+	router.HandleFunc("/feedback/positive/{query_id}", s.feedbackHandler.HandleFeedbackPage).Methods("GET")
+	router.HandleFunc("/feedback/negative/{query_id}", s.feedbackHandler.HandleFeedbackPage).Methods("GET")
+	router.HandleFunc("/feedback/submit", s.feedbackHandler.HandleFeedbackSubmit).Methods("POST", "OPTIONS")
+	router.HandleFunc("/feedback/merge", s.feedbackHandler.HandleFeedbackMerge).Methods("POST", "OPTIONS")
+	router.HandleFunc("/feedback/stats", s.feedbackHandler.HandleFeedbackStats).Methods("GET", "OPTIONS")
 
 	// WebSocket路由
 	router.HandleFunc("/ws/v1/query", s.wsServer.HandleWebSocket)

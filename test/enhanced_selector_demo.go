@@ -4,24 +4,32 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 
+	"github.com/channelwill/nlq/internal/config"
 	"github.com/channelwill/nlq/internal/database"
 	"github.com/channelwill/nlq/internal/handler"
 	"github.com/channelwill/nlq/internal/llm"
-	"gorm.io/driver/mysql"
-	"gorm.io/gorm"
 )
 
 func main() {
-	// 数据库连接配置
-	dsn := "root:root@tcp(127.0.0.1:3306)/loloyal?charset=utf8mb4&parseTime=True&loc=Local"
+	// 加载配置
+	cfg, err := config.LoadConfig("")
+	if err != nil {
+		fmt.Printf("加载配置失败: %v\n", err)
+		os.Exit(1)
+	}
 
-	// 连接数据库
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	// 创建数据库连接
+	db, err := database.NewConnection(&cfg.Database)
 	if err != nil {
 		fmt.Printf("数据库连接失败: %v\n", err)
-		return
+		os.Exit(1)
 	}
+	defer func() {
+		sqlDB, _ := db.DB()
+		sqlDB.Close()
+	}()
 
 	// 创建Schema解析器
 	parser := database.NewSchemaParser(db)

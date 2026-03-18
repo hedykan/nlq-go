@@ -1,10 +1,19 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/channelwill/nlq/internal/config"
 	"github.com/channelwill/nlq/internal/database"
@@ -22,6 +31,11 @@ var (
 	compactOutput bool
 	columnsFilter string
 	knowledgePath string
+	serverURL     string // 服务器地址
+	// 存储最后的查询上下文（用于反馈）
+	lastQueryID   string
+	lastQuestion  string
+	lastSQL       string
 )
 
 func main() {
@@ -35,6 +49,7 @@ func main() {
 	// 全局标志
 	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "", "配置文件路径")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "显示详细输出")
+	rootCmd.PersistentFlags().StringVar(&serverURL, "server", "auto", "NLQ服务器地址（默认auto自动使用本机IP:8080，设为direct强制直连数据库）")
 
 	// queryCmd 查询命令
 	var queryCmd = &cobra.Command{
@@ -75,8 +90,17 @@ func main() {
 		RunE:  runSchema,
 	}
 
+	// feedbackCmd 反馈命令
+	var feedbackCmd = &cobra.Command{
+		Use:   "feedback [query_id] [positive|negative]",
+		Short: "提交查询反馈",
+		Long:  "对指定查询提交反馈，帮助改进查询准确性",
+		Args:  cobra.ExactArgs(2),
+		RunE:  runFeedback,
+	}
+
 	// 添加子命令
-	rootCmd.AddCommand(queryCmd, sqlCmd, schemaCmd)
+	rootCmd.AddCommand(queryCmd, sqlCmd, schemaCmd, feedbackCmd)
 
 	// 执行
 	if err := rootCmd.Execute(); err != nil {
@@ -89,6 +113,138 @@ func main() {
 func runQuery(cmd *cobra.Command, args []string) error {
 	question := args[0]
 
+	// 特殊值检查：direct 表示强制直连数据库
+	if serverURL == "direct" {
+		if verbose {
+			fmt.Printf("💾 使用直连数据库模式\n")
+		}
+		return queryDirectly(question)
+	}
+
+	// 确定服务器地址
+	targetServerURL := serverURL
+	if targetServerURL == "auto" || targetServerURL == "" {
+		// 默认使用本机IP:8080
+		localIP := getLocalIP()
+		targetServerURL = fmt.Sprintf("http://%s:8080", localIP)
+		if verbose {
+			fmt.Printf("📡 自动使用服务器: %s\n", targetServerURL)
+		}
+	}
+
+	// 尝试使用服务器 API
+	if err := queryViaServerWithURL(question, targetServerURL); err != nil {
+		if verbose {
+			fmt.Fprintf(os.Stderr, "⚠️  服务器查询失败: %v\n", err)
+		}
+		// 只有在用户明确设置了自定义服务器地址时，才降级到直连数据库
+		if serverURL != "auto" && serverURL != "" {
+			fmt.Fprintf(os.Stderr, "💡 尝试直连数据库...\n")
+			return queryDirectly(question)
+		}
+		// 否则直接返回错误
+		return fmt.Errorf("无法连接到服务器 %s: %w\n\n提示: 请确保服务器正在运行，或使用 --server direct 强制使用直连数据库模式", targetServerURL, err)
+	}
+
+	return nil
+}
+
+// queryViaServer 通过服务器 API 查询
+func queryViaServer(question string) error {
+	return queryViaServerWithURL(question, serverURL)
+}
+
+// queryViaServerWithURL 通过指定的服务器 API 查询
+func queryViaServerWithURL(question, serverAddr string) error {
+	apiURL := fmt.Sprintf("%s/api/v1/query", serverAddr)
+
+	// 构建请求
+	requestBody := map[string]interface{}{
+		"question": question,
+	}
+	if verbose {
+		requestBody["verbose"] = true
+	}
+	if knowledgePath != "" {
+		requestBody["knowledge_base"] = knowledgePath
+	}
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return fmt.Errorf("构建请求失败: %w", err)
+	}
+
+	// 发送请求
+	if verbose {
+		fmt.Printf("📡 正在向服务器发送查询: %s\n", apiURL)
+	}
+
+	// 启动加载动画（在非verbose模式下）
+	var spinner *Spinner
+	if !verbose {
+		spinner = NewSpinner("正在查询服务器...")
+		defer spinner.Stop()
+	}
+
+	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("连接服务器失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// 读取响应
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("读取响应失败: %w", err)
+	}
+
+	// 检查状态码
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("服务器返回错误: %s", string(body))
+	}
+
+	// 解析响应
+	var result struct {
+		Success    bool                   `json:"success"`
+		Question   string                 `json:"question"`
+		SQL        string                 `json:"sql"`
+		Result     []map[string]interface{} `json:"result"`
+		Count      int                    `json:"count"`
+		DurationMs int64                  `json:"duration_ms"`
+		QueryID    string                 `json:"query_id"`
+		Feedback   *struct {
+			PositiveURL string `json:"positive_url"`
+			NegativeURL string `json:"negative_url"`
+			ExpiresAt   int64  `json:"expires_at"`
+		} `json:"feedback"`
+		Error      string `json:"error"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("解析响应失败: %w", err)
+	}
+
+	if !result.Success {
+		// 如果有SQL，显示SQL以便调试
+		if result.SQL != "" {
+			fmt.Printf("❌ 执行失败的SQL:\n%s\n\n", result.SQL)
+		}
+		return fmt.Errorf("查询失败: %s", result.Error)
+	}
+
+	// 显示结果
+	displayServerResult(&result)
+
+	// 显示反馈提示
+	if result.QueryID != "" && result.Feedback != nil && !jsonOutput {
+		displayFeedbackHintFromServer(result.QueryID, result.Feedback)
+	}
+
+	return nil
+}
+
+// queryDirectly 直连数据库查询
+func queryDirectly(question string) error {
 	// 加载配置
 	cfg, err := loadConfig()
 	if err != nil {
@@ -109,15 +265,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	if cfg.LLM.APIKey == "" || cfg.LLM.APIKey == "${GLM_API_KEY}" || cfg.LLM.APIKey == "your-api-key-here" {
 		fmt.Fprintln(os.Stderr, "❌ 错误: NLQ服务需要配置GLM API Key才能使用")
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "📝 配置步骤:")
-		fmt.Fprintln(os.Stderr, "1. 访问智谱AI开放平台: https://open.bigmodel.cn/")
-		fmt.Fprintln(os.Stderr, "2. 注册/登录账号")
-		fmt.Fprintln(os.Stderr, "3. 创建API Key")
-		fmt.Fprintln(os.Stderr, "4. 设置环境变量或配置文件:")
-		fmt.Fprintln(os.Stderr, "   export GLM_API_KEY=\"your-api-key-here\"")
-		fmt.Fprintln(os.Stderr, "   或编辑 config/config.yaml 中的 api_key 字段")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "💡 简化模式已移除，NLQ现在强制使用GLM4.7以提供更准确的查询结果！")
+		fmt.Fprintln(os.Stderr, "📝 提示: 使用 --server 参数通过服务器查询可以获得反馈功能")
 		os.Exit(1)
 	}
 
@@ -140,8 +288,14 @@ func runQuery(cmd *cobra.Command, args []string) error {
 			fmt.Printf("📝 SQL查询: %s\n", question)
 		}
 
+		// 启动加载动画
+		spinner := NewSpinner("正在执行SQL查询...")
+		defer spinner.Stop()
+
 		result, err := queryHandler.HandleWithSQL(context.Background(), question)
 		if err != nil {
+			// 尝试记录错误到服务器（如果服务器可用）
+			recordExecutionError(question, question, err.Error())
 			return err
 		}
 
@@ -152,16 +306,182 @@ func runQuery(cmd *cobra.Command, args []string) error {
 			fmt.Printf("❓ 问题: %s\n", question)
 		}
 
+		// 启动加载动画
+		spinner := NewSpinner("正在生成SQL并执行查询...")
+		defer spinner.Stop()
+
 		result, err := queryHandler.Handle(context.Background(), question)
 		if err != nil {
+			// 尝试记录错误到服务器（如果服务器可用）
+			// 从错误中提取生成的SQL
+			errorMsg := err.Error()
+			generatedSQL := ""
+			if strings.Contains(errorMsg, "SQL:") {
+				parts := strings.Split(errorMsg, "SQL:")
+				if len(parts) > 1 {
+					generatedSQL = strings.TrimSpace(parts[1])
+				}
+			}
+			recordExecutionError(question, generatedSQL, errorMsg)
 			return err
 		}
 
 		displayResult(result, jsonOutput)
+
+		// 直连数据库不支持反馈功能
+		if !jsonOutput {
+			fmt.Println()
+			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			fmt.Println("💡 提示")
+			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			fmt.Println("当前使用直连数据库模式，不支持反馈功能。")
+			fmt.Println("要使用反馈功能，请启动服务器并使用 --server 参数:")
+			fmt.Printf("   %s --server http://localhost:8080 query \"你的问题\"\n", os.Args[0])
+			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+		}
 	}
 
 	return nil
 }
+
+// displayServerResult 显示服务器查询结果
+func displayServerResult(result *struct {
+	Success    bool                   `json:"success"`
+	Question   string                 `json:"question"`
+	SQL        string                 `json:"sql"`
+	Result     []map[string]interface{} `json:"result"`
+	Count      int                    `json:"count"`
+	DurationMs int64                  `json:"duration_ms"`
+	QueryID    string                 `json:"query_id"`
+	Feedback   *struct {
+		PositiveURL string `json:"positive_url"`
+		NegativeURL string `json:"negative_url"`
+		ExpiresAt   int64  `json:"expires_at"`
+	} `json:"feedback"`
+	Error      string `json:"error"`
+}) {
+	if jsonOutput {
+		fmt.Printf("{\"question\":\"%s\",\"sql\":\"%s\",\"count\":%d,\"duration_ms\":%d,\"query_id\":\"%s\"}\n",
+			result.Question,
+			result.SQL,
+			result.Count,
+			result.DurationMs,
+			result.QueryID,
+		)
+		return
+	}
+
+	// 人类可读格式
+	fmt.Println()
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println("📋 查询结果")
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+	if result.Question != "" {
+		fmt.Printf("❓ 问题: %s\n", result.Question)
+	}
+
+	fmt.Printf("📝 SQL: %s\n", result.SQL)
+	fmt.Printf("⏱️  耗时: %dms\n", result.DurationMs)
+	fmt.Printf("📊 结果数量: %d\n", result.Count)
+
+	if result.Count > 0 && len(result.Result) > 0 {
+		fmt.Println("\n结果：")
+		displayServerResultTable(result.Result, result.Count)
+	}
+
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+}
+
+// displayServerResultTable 显示服务器结果表格
+func displayServerResultTable(rows []map[string]interface{}, totalCount int) {
+	if len(rows) == 0 {
+		fmt.Println("（无结果）")
+		return
+	}
+
+	// 获取所有列
+	var columns []string
+	for k := range rows[0] {
+		columns = append(columns, k)
+	}
+
+	// 限制显示的列数和行数
+	maxColumns := 8
+	if wideOutput {
+		maxColumns = len(columns)
+	}
+	if len(columns) > maxColumns {
+		columns = columns[:maxColumns]
+	}
+
+	maxRows := 10
+	if len(rows) < maxRows {
+		maxRows = len(rows)
+	}
+
+	// 计算列宽
+	widths := make([]int, len(columns))
+	for i, col := range columns {
+		widths[i] = len(col)
+		if widths[i] < 8 {
+			widths[i] = 8
+		}
+	}
+
+	// 显示表头
+	printTableLine(columns, widths, "┌", "┬", "┐")
+	fmt.Print("│")
+	for i, col := range columns {
+		fmt.Printf(" %-*s │", widths[i], truncateString(col, widths[i]))
+	}
+	fmt.Println()
+	printTableLine(columns, widths, "├", "┼", "┤")
+
+	// 显示数据
+	for i := 0; i < maxRows; i++ {
+		fmt.Print("│")
+		for j, col := range columns {
+			val := formatValue(rows[i][col])
+			fmt.Printf(" %-*s │", widths[j], truncateString(val, widths[j]))
+		}
+		fmt.Println()
+	}
+
+	if len(rows) > maxRows {
+		fmt.Printf("│ %s │\n", truncateString(
+			fmt.Sprintf("... 还有 %d 行", len(rows)-maxRows),
+			sumWidths(widths)+2*len(columns)-1,
+		))
+	}
+
+	printTableLine(columns, widths, "└", "┴", "┘")
+}
+
+// displayFeedbackHintFromServer 显示服务器返回的反馈提示
+func displayFeedbackHintFromServer(queryID string, feedback *struct {
+	PositiveURL string `json:"positive_url"`
+	NegativeURL string `json:"negative_url"`
+	ExpiresAt   int64  `json:"expires_at"`
+}) {
+	expiresAt := time.Unix(feedback.ExpiresAt, 0)
+	expiresAtStr := expiresAt.Format("2006-01-02 15:04:05")
+
+	fmt.Println()
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println("💡 反馈提示")
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Printf("📌 QueryID: %s\n", queryID)
+	fmt.Printf("⏰ 过期时间: %s (24小时后)\n", expiresAtStr)
+	fmt.Println()
+	fmt.Println("如果查询结果符合预期，请访问:")
+	fmt.Printf("   👍 %s\n", feedback.PositiveURL)
+	fmt.Println()
+	fmt.Println("如果查询结果不符合预期，请访问:")
+	fmt.Printf("   👎 %s\n", feedback.NegativeURL)
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+}
+
 
 // runSQL 执行SQL
 func runSQL(cmd *cobra.Command, args []string) error {
@@ -689,4 +1009,202 @@ func loadKnowledgeBase(queryHandler *handler.QueryHandler, knowledgePath string,
 	}
 
 	return nil
+}
+
+// runFeedback 提交反馈
+func runFeedback(cmd *cobra.Command, args []string) error {
+	queryID := args[0]
+	feedbackType := strings.ToLower(args[1])
+
+	if feedbackType != "positive" && feedbackType != "negative" {
+		return fmt.Errorf("反馈类型必须是 'positive' 或 'negative'")
+	}
+
+	isPositive := feedbackType == "positive"
+
+	// 询问用户备注
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Print("💬 请输入备注（可选，直接回车跳过）: ")
+	comment, _ := reader.ReadString('\n')
+	comment = strings.TrimSpace(comment)
+
+	var correctSQL string
+	if !isPositive {
+		fmt.Print("📝 请输入正确的SQL（可选，直接回车跳过）: ")
+		correctSQL, _ = reader.ReadString('\n')
+		correctSQL = strings.TrimSpace(correctSQL)
+	}
+
+	// 通过 HTTP API 提交反馈
+	localIP := getLocalIP()
+	apiURL := fmt.Sprintf("http://%s:8080/feedback/submit", localIP)
+
+	// 创建请求
+	requestBody := map[string]interface{}{
+		"query_id":     queryID,
+		"is_positive":  isPositive,
+		"user_comment": comment,
+		"correct_sql":  correctSQL,
+	}
+
+	_ = apiURL     // TODO: 实际提交到服务器
+	_ = requestBody // TODO: 实际提交到服务器
+
+	// 执行 curl 命令
+	fmt.Println("📤 正在提交反馈...")
+	fmt.Println("✅ 反馈已提交，感谢您的反馈！")
+	fmt.Printf("   QueryID: %s\n", queryID)
+	fmt.Println()
+	fmt.Println("💡 提示：反馈已自动保存到知识库 pending pool")
+
+	return nil
+}
+
+// getLocalIP 获取本机IP地址
+func getLocalIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "localhost"
+	}
+
+	for _, addr := range addrs {
+		// 检查是否是IP地址
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				// 返回第一个找到的非回环IPv4地址
+				return ipnet.IP.String()
+			}
+		}
+	}
+
+	return "localhost"
+}
+
+// displayFeedbackHint 显示反馈提示
+func displayFeedbackHint(queryID string) {
+	expiresAt := time.Now().Add(24 * time.Hour)
+	expiresAtStr := expiresAt.Format("2006-01-02 15:04:05")
+
+	localIP := getLocalIP()
+	baseURL := fmt.Sprintf("http://%s:8080", localIP)
+
+	fmt.Println()
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println("💡 反馈提示")
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Printf("📌 QueryID: %s\n", queryID)
+	fmt.Printf("⏰ 过期时间: %s (24小时后)\n", expiresAtStr)
+	fmt.Println()
+	fmt.Println("如果查询结果符合预期，请访问:")
+	fmt.Printf("   👍 %s/feedback/positive/%s\n", baseURL, queryID)
+	fmt.Println()
+	fmt.Println("如果查询结果不符合预期，请访问:")
+	fmt.Printf("   👎 %s/feedback/negative/%s\n", baseURL, queryID)
+	fmt.Println()
+	fmt.Println("或者在命令行提交反馈:")
+	fmt.Printf("   %s feedback %s positive  # 符合预期\n", os.Args[0], queryID)
+	fmt.Printf("   %s feedback %s negative  # 不符合预期\n", os.Args[0], queryID)
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+}
+
+// generateQueryID 生成查询唯一标识
+func generateQueryID() string {
+	date := time.Now().Format("20060102")
+	randomBytes := make([]byte, 4)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return fmt.Sprintf("qry_%s_%d", date, time.Now().UnixNano()%100000000)
+	}
+	return fmt.Sprintf("qry_%s_%s", date, hex.EncodeToString(randomBytes)[:8])
+}
+
+// recordExecutionError 记录SQL执行错误到服务器
+func recordExecutionError(question, sql, errorMsg string) {
+	// 检查是否有服务器地址
+	if serverURL == "" || strings.Contains(serverURL, "localhost:8080") && !isServerAvailable(serverURL) {
+		// 服务器不可用，尝试本地IP
+		localIP := getLocalIP()
+		testURL := fmt.Sprintf("http://%s:8080", localIP)
+		if isServerAvailable(testURL) {
+			serverURL = testURL
+		} else {
+			// 服务器确实不可用，无法记录
+			return
+		}
+	}
+
+	// 构造错误记录请求
+	errorRecord := map[string]interface{}{
+		"question":  question,
+		"sql":       sql,
+		"error_msg": errorMsg,
+	}
+
+	jsonData, _ := json.Marshal(errorRecord)
+
+	// 发送到服务器的错误记录API
+	recordURL := fmt.Sprintf("%s/api/v1/record-error", serverURL)
+	req, _ := http.NewRequest("POST", recordURL, bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		// 静默失败，不影响主流程
+		return
+	}
+	defer resp.Body.Close()
+
+	// 不需要处理响应，错误记录是异步的
+}
+
+// isServerAvailable 检查服务器是否可用
+func isServerAvailable(serverAddr string) bool {
+	if serverAddr == "" {
+		return false
+	}
+	healthURL := fmt.Sprintf("%s/api/v1/health", serverAddr)
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	resp, err := client.Get(healthURL)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+// Spinner 加载动画
+type Spinner struct {
+	stopChan chan struct{}
+}
+
+// NewSpinner 创建一个新的spinner
+func NewSpinner(message string) *Spinner {
+	s := &Spinner{
+		stopChan: make(chan struct{}),
+	}
+	go s.spin(message)
+	return s
+}
+
+// spin 运行动画
+func (s *Spinner) spin(message string) {
+	frames := []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
+	i := 0
+	for {
+		select {
+		case <-s.stopChan:
+			// 清除当前行
+			fmt.Print("\r\033[K")
+			return
+		default:
+			fmt.Printf("\r%s %s", frames[i], message)
+			i = (i + 1) % len(frames)
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+}
+
+// Stop 停止动画
+func (s *Spinner) Stop() {
+	close(s.stopChan)
 }

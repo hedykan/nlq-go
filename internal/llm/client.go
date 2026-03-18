@@ -163,7 +163,7 @@ func (c *GLMClient) GenerateContent(ctx context.Context, systemPrompt, userPromp
 			{Role: "user", Content: userPrompt},
 		},
 		Temperature: 0.1,
-		MaxTokens:   2000,
+		MaxTokens:   4096, // 增加到4096以支持更复杂的SQL生成
 	}
 
 	// 调用API

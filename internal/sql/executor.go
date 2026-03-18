@@ -43,7 +43,7 @@ func (e *Executor) Execute(ctx context.Context, sqlQuery string) (*ExecuteResult
 	// 2. 执行查询
 	rows, err := e.db.WithContext(ctx).Raw(sqlQuery).Rows()
 	if err != nil {
-		return nil, fmt.Errorf("执行SQL失败: %w", err)
+		return nil, fmt.Errorf("执行SQL失败: %w\nSQL: %s", err, sqlQuery)
 	}
 	defer rows.Close()
 
@@ -112,7 +112,7 @@ func (e *Executor) ExecuteSimple(ctx context.Context, sqlQuery string) (interfac
 	// 2. 执行查询
 	var result interface{}
 	if err := e.db.WithContext(ctx).Raw(sqlQuery).Scan(&result).Error; err != nil {
-		return nil, fmt.Errorf("执行SQL失败: %w", err)
+		return nil, fmt.Errorf("执行SQL失败: %w\nSQL: %s", err, sqlQuery)
 	}
 
 	return result, nil
