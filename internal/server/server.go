@@ -8,6 +8,7 @@ import (
 
 	"github.com/channelwill/nlq/internal/config"
 	"github.com/channelwill/nlq/internal/feedback"
+	"github.com/channelwill/nlq/pkg/utils"
 	"github.com/gorilla/mux"
 )
 
@@ -19,6 +20,7 @@ type Server struct {
 	wsServer        *WebSocketServer
 	feedbackHandler *FeedbackHandler
 	config          *config.Config
+	httpLogger      *utils.HTTPRequestLogger
 }
 
 // NewServer 创建新的HTTP服务器
@@ -46,9 +48,13 @@ func NewServer(cfg *config.Config, dbHandler QueryHandlerInterface) (*Server, er
 		wsServer:        wsServer,
 		feedbackHandler: feedbackHandler,
 		config:          cfg,
+		httpLogger:      utils.NewHTTPRequestLogger(),
 	}
 
 	server.setupRoutes(router)
+
+	// 添加日志中间件
+	router.Use(server.loggingMiddleware)
 
 	// 创建HTTP服务器
 	address := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
@@ -57,7 +63,7 @@ func NewServer(cfg *config.Config, dbHandler QueryHandlerInterface) (*Server, er
 		Handler:      router,
 		ReadTimeout:  cfg.Server.ReadTimeout,
 		WriteTimeout: cfg.Server.WriteTimeout,
-		IdleTimeout:  120 * time.Second,
+		IdleTimeout:  180 * time.Second,  // 增加空闲超时以支持慢速LLM
 	}
 
 	server.server = httpServer
@@ -133,4 +139,50 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // GetRouter 获取路由器（用于测试）
 func (s *Server) GetRouter() *mux.Router {
 	return s.router
+}
+
+// loggingMiddleware HTTP请求日志中间件
+func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 记录请求开始
+		requestID := s.httpLogger.LogRequest(r)
+		startTime := time.Now()
+
+		// 创建响应记录器以捕获状态码
+		recorder := &responseRecorder{
+			ResponseWriter: w,
+			statusCode:     http.StatusOK,
+		}
+
+		// 将请求ID添加到上下文
+		ctx := r.Context()
+		ctx = context.WithValue(ctx, "requestID", requestID)
+		ctx = context.WithValue(ctx, "httpLogger", s.httpLogger)
+		ctx = context.WithValue(ctx, "startTime", startTime)
+		r = r.WithContext(ctx)
+
+		// 调用下一个处理器
+		defer func() {
+			duration := time.Since(startTime)
+			if recorder.statusCode >= 400 {
+				s.httpLogger.LogRequestError(requestID, duration, fmt.Errorf("HTTP %d", recorder.statusCode))
+			} else {
+				s.httpLogger.LogRequestSuccess(requestID, duration, recorder.statusCode)
+			}
+		}()
+
+		next.ServeHTTP(recorder, r)
+	})
+}
+
+// responseRecorder 响应记录器
+type responseRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+// WriteHeader 拦截WriteHeader以记录状态码
+func (r *responseRecorder) WriteHeader(statusCode int) {
+	r.statusCode = statusCode
+	r.ResponseWriter.WriteHeader(statusCode)
 }

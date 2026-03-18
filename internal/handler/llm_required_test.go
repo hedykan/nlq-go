@@ -42,7 +42,7 @@ func TestNewQueryHandlerWithLLM_EmptyAPIKey(t *testing.T) {
 	}
 
 	// 空API Key应该创建一个不可用的处理器
-	handler := NewQueryHandlerWithLLM(db, "", "")
+	handler := NewQueryHandlerWithLLM(db, "", "", "")
 	if handler == nil {
 		t.Fatal("期望返回处理器实例，即使API Key为空")
 	}
@@ -78,7 +78,7 @@ func TestQueryHandler_Handle_WithValidLLM(t *testing.T) {
 	}
 
 	// 使用Mock LLM客户端
-	handler := NewQueryHandlerWithLLM(db, "test-api-key", "http://test")
+	handler := NewQueryHandlerWithLLM(db, "test-api-key", "http://test", "glm-4-plus")
 
 	// 验证LLM被正确设置
 	if !handler.useRealLLM {

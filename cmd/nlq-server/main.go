@@ -50,7 +50,7 @@ func main() {
 	}
 
 	// 使用两阶段处理器（推荐用于大型数据库）
-	queryHandler := handler.NewTwoPhaseQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL)
+	queryHandler := handler.NewTwoPhaseQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model)
 	fmt.Printf("🤖 使用两阶段查询处理器 + GLM4.7 LLM: %s\n", cfg.LLM.Model)
 
 	// 自动加载知识库
@@ -95,42 +95,15 @@ func main() {
 
 // loadConfig 加载配置
 func loadConfig() (*config.Config, error) {
-	cfg := &config.Config{}
-	cfg.SetDefaults()
-
-	// 设置默认数据库配置（与CLI工具一致）
-	cfg.Database.Host = "localhost"
-	cfg.Database.Port = 3306
-	cfg.Database.Database = "loloyal"
-	cfg.Database.Username = "root"
-	cfg.Database.Password = "root"
-	cfg.Database.Readonly = true
-
-	// 尝试从配置文件加载
-	configFile := "config/config.yaml"
-	if _, err := os.Stat(configFile); err == nil {
-		// 配置文件存在，从文件加载
-		loadedCfg, err := config.LoadFromFile(configFile)
-		if err != nil {
-			return nil, fmt.Errorf("加载配置文件失败: %w", err)
-		}
-		cfg = loadedCfg
-	} else {
-		fmt.Println("⚠️  配置文件不存在，使用默认配置")
+	// 使用viper加载配置（支持配置文件、环境变量、默认值）
+	cfg, err := config.LoadConfig("config/config.yaml")
+	if err != nil {
+		return nil, fmt.Errorf("加载配置失败: %w", err)
 	}
 
-	// 尝试从环境变量覆盖
-	if apiKey := os.Getenv("GLM_API_KEY"); apiKey != "" {
-		cfg.LLM.APIKey = apiKey
-	}
-	if dbHost := os.Getenv("DATABASE_HOST"); dbHost != "" {
-		cfg.Database.Host = dbHost
-	}
-	if dbPort := os.Getenv("DATABASE_PORT"); dbPort != "" {
-		fmt.Sscanf(dbPort, "%d", &cfg.Database.Port)
-	}
-	if dbName := os.Getenv("DATABASE_NAME"); dbName != "" {
-		cfg.Database.Database = dbName
+	// 验证配置
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("配置验证失败: %w", err)
 	}
 
 	return cfg, nil

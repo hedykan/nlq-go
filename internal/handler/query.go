@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/channelwill/nlq/internal/database"
@@ -29,22 +28,21 @@ type LLMClient interface {
 	IsAvailable() bool
 }
 
-// NewQueryHandler 创建查询处理器（已废弃，强制使用LLM模式）
+// NewQueryHandler 创建查询处理器（用于不需要LLM的场景：直接SQL执行、Schema查看）
+// 注意：此处理器不包含LLM功能，仅用于SQL执行和Schema查询
+// 如需自然语言转SQL功能，请使用 NewQueryHandlerWithLLM
 func NewQueryHandler(db *gorm.DB) *QueryHandler {
-	// 创建一个不可用的处理器，强制用户配置LLM
-	handler := &QueryHandler{
+	return &QueryHandler{
 		db:         db,
 		parser:     database.NewSchemaParser(db),
 		executor:   sql.NewExecutor(db),
 		useRealLLM: false,
-		llmClient:  nil, // 明确设置为nil，强制要求LLM
+		llmClient:  nil,
 	}
-
-	return handler
 }
 
 // NewQueryHandlerWithLLM 创建带LLM的查询处理器（强制要求API Key）
-func NewQueryHandlerWithLLM(db *gorm.DB, apiKey, baseURL string) *QueryHandler {
+func NewQueryHandlerWithLLM(db *gorm.DB, apiKey, baseURL, model string) *QueryHandler {
 	handler := &QueryHandler{
 		db:         db,
 		parser:     database.NewSchemaParser(db),
@@ -60,14 +58,14 @@ func NewQueryHandlerWithLLM(db *gorm.DB, apiKey, baseURL string) *QueryHandler {
 	}
 
 	// 创建真实的GLM客户端
-	handler.llmClient = llm.NewGLMClient(apiKey, baseURL)
+	handler.llmClient = llm.NewGLMClient(apiKey, baseURL, model)
 	handler.useRealLLM = true
 
 	return handler
 }
 
 // NewTwoPhaseQueryHandlerWithLLM 创建两阶段查询处理器（推荐用于大型数据库）
-func NewTwoPhaseQueryHandlerWithLLM(db *gorm.DB, apiKey, baseURL string) *TwoPhaseQueryHandler {
+func NewTwoPhaseQueryHandlerWithLLM(db *gorm.DB, apiKey, baseURL, model string) *TwoPhaseQueryHandler {
 	// 创建Schema解析器
 	parser := database.NewSchemaParser(db)
 
@@ -81,7 +79,7 @@ func NewTwoPhaseQueryHandlerWithLLM(db *gorm.DB, apiKey, baseURL string) *TwoPha
 	}
 
 	// 创建真实的GLM客户端
-	llmClient := llm.NewGLMClient(apiKey, baseURL)
+	llmClient := llm.NewGLMClient(apiKey, baseURL, model)
 
 	// 创建两阶段处理器
 	return NewTwoPhaseQueryHandler(parser, db, llmClient)
@@ -195,30 +193,6 @@ func (h *QueryHandler) HandleWithSQL(ctx context.Context, sqlQuery string) (*Que
 	result.Duration = time.Since(start)
 
 	return result, nil
-}
-
-// generateSQLSimple 简化的SQL生成逻辑（已废弃，现在强制使用LLM模式）
-// 注意：此方法已不再使用，所有查询都必须通过LLM
-func (h *QueryHandler) generateSQLSimple(question, schema string) (string, error) {
-	// 简化模式已移除，强制要求使用LLM
-	return "", fmt.Errorf("简化SQL生成已禁用，必须配置GLM API Key才能使用NLQ服务")
-}
-
-// extractTableName 从问题中提取表名
-func (h *QueryHandler) extractTableName(question string) string {
-	// 常见表名列表
-	commonTables := []string{
-		"boom_user", "boom_customer", "boom_order_paid_water",
-		"boom_product", "boom_member", "boom_plan",
-	}
-
-	for _, table := range commonTables {
-		if strings.Contains(question, table) {
-			return table
-		}
-	}
-
-	return ""
 }
 
 // GetSchema 获取数据库Schema

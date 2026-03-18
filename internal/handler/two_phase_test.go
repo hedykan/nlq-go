@@ -60,7 +60,7 @@ func TestTableSelector(t *testing.T) {
 		sqlGenerationResponse: "SELECT * FROM users WHERE id = 1",
 	}
 
-	selector := NewTableSelector(mockLLM)
+	selector := NewTableSelector(mockLLM, nil)
 
 	// 测试parseTableSelection（不需要真实数据库）
 	tables := []database.TableSummary{
@@ -146,7 +146,7 @@ func TestTwoPhaseQueryHandler(t *testing.T) {
 
 // TestExtractJSON 提取JSON测试
 func TestExtractJSON(t *testing.T) {
-	selector := NewTableSelector(nil)
+	selector := NewTableSelector(nil, nil)
 
 	tests := []struct {
 		name     string
@@ -182,7 +182,7 @@ func TestExtractJSON(t *testing.T) {
 
 // TestParseTableSelection 表选择解析测试
 func TestParseTableSelection(t *testing.T) {
-	selector := NewTableSelector(nil)
+	selector := NewTableSelector(nil, nil)
 
 	tables := []database.TableSummary{
 		{Name: "users", Comment: "用户表"},
@@ -243,7 +243,7 @@ func setupMockSchemaParser() *database.SchemaParser {
 
 // TestTableSelectionPrompt 表选择Prompt测试
 func TestTableSelectionPrompt(t *testing.T) {
-	selector := NewTableSelector(nil)
+	selector := NewTableSelector(nil, nil)
 
 	tables := []database.TableSummary{
 		{Name: "users", Comment: "用户表", RowCount: 1000},

@@ -3,6 +3,8 @@ package knowledge
 import (
 	"fmt"
 	"strings"
+
+	"github.com/channelwill/nlq/pkg/utils"
 )
 
 // Injector 知识库注入器
@@ -75,7 +77,7 @@ func (i *Injector) InjectWithMaxTokens(basePrompt string, documents []Document, 
 		// 优先保留知识库内容
 		result = basePrompt + "\n\n" + knowledgeContext
 		if len(result) > maxChars {
-			result = basePrompt + "\n\n" + truncateString(knowledgeContext, maxChars-len(basePrompt)-20)
+			result = basePrompt + "\n\n" + utils.TruncateString(knowledgeContext, maxChars-len(basePrompt)-20)
 		}
 	}
 
@@ -138,7 +140,7 @@ func (i *Injector) BuildKnowledgeContextWithLimit(documents []Document, maxChars
 				remainingChars := maxChars - currentLength - 20
 				if remainingChars > 0 {
 					builder.WriteString(fmt.Sprintf("### %s\n", doc.Title))
-					builder.WriteString(truncateString(doc.Content, remainingChars))
+					builder.WriteString(utils.TruncateString(doc.Content, remainingChars))
 				}
 			}
 			break
@@ -171,12 +173,4 @@ func (i *Injector) SetMaxTokens(maxTokens int) {
 // SetEnabled 设置是否启用注入
 func (i *Injector) SetEnabled(enabled bool) {
 	i.enabled = enabled
-}
-
-// truncateString 截断字符串
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
 }

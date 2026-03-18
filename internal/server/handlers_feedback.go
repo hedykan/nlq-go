@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/channelwill/nlq/internal/feedback"
+	"github.com/channelwill/nlq/pkg/utils"
 	"github.com/gorilla/mux"
 )
 
@@ -364,7 +365,7 @@ func (h *FeedbackHandler) RecordExecutionError(question, sql, errorMsg string) {
 	defer h.mu.Unlock()
 
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	queryID := GenerateQueryID() // 使用查询ID生成器
+	queryID := utils.GenerateQueryID() // 使用查询ID生成器
 
 	// 调试：打印SQL长度
 	fmt.Printf("🔍 记录错误: Question长度=%d, SQL长度=%d, Error长度=%d\n",

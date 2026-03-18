@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/channelwill/nlq/internal/feedback"
+	"github.com/channelwill/nlq/pkg/utils"
 	"github.com/gorilla/websocket"
 )
 
@@ -147,7 +148,7 @@ func (ws *WebSocketServer) handleQuery(conn *websocket.Conn, message WebSocketMe
 	}
 
 	// 生成QueryID
-	queryID := GenerateQueryID()
+	queryID := utils.GenerateQueryID()
 
 	// 存储查询上下文（供反馈使用）
 	queryContext := &feedback.QueryContext{

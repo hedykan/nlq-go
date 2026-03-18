@@ -85,12 +85,19 @@ func BuildSQLCorrectionPrompt(sql, errorMsg, schema string) (string, error) {
 // ParseSQLFromResponse 从LLM响应中解析SQL
 func ParseSQLFromResponse(response string) (string, error) {
 	response = strings.TrimSpace(response)
+
+	// 添加详细日志
+	fmt.Printf("🔍 [SQL解析] 原始响应长度: %d\n", len(response))
+	fmt.Printf("🔍 [SQL解析] 原始响应内容: %q\n", response)
+
 	if response == "" {
+		fmt.Println("❌ [SQL解析] 响应为空！")
 		return "", errors.New("LLM响应为空")
 	}
 
 	// 尝试提取代码块中的SQL
 	if code, found := ExtractSQLCodeBlock(response); found {
+		fmt.Printf("✅ [SQL解析] 从代码块提取SQL: %q\n", code)
 		return strings.TrimSpace(code), nil
 	}
 
@@ -99,7 +106,9 @@ func ParseSQLFromResponse(response string) (string, error) {
 	var sqlLines []string
 	inSQL := false
 
-	for _, line := range lines {
+	fmt.Printf("🔍 [SQL解析] 响应行数: %d\n", len(lines))
+
+	for i, line := range lines {
 		trimmedLine := strings.TrimSpace(line)
 
 		// 跳过空行
@@ -115,13 +124,16 @@ func ParseSQLFromResponse(response string) (string, error) {
 		if !inSQL && (strings.HasPrefix(strings.ToUpper(trimmedLine), "SELECT") ||
 			strings.HasPrefix(strings.ToUpper(trimmedLine), "WITH")) {
 			inSQL = true
+			fmt.Printf("🔍 [SQL解析] 第%d行: 检测到SQL开始\n", i+1)
 		}
 
 		if inSQL {
 			sqlLines = append(sqlLines, trimmedLine)
+			fmt.Printf("🔍 [SQL解析] 第%d行: 添加到SQL: %q\n", i+1, trimmedLine)
 
 			// 检查是否是SQL语句的结束
 			if strings.HasSuffix(trimmedLine, ";") {
+				fmt.Printf("✅ [SQL解析] 第%d行: 检测到分号，结束解析\n", i+1)
 				break
 			}
 
@@ -141,17 +153,21 @@ func ParseSQLFromResponse(response string) (string, error) {
 			if !isSQLLine && len(sqlLines) > 1 {
 				// 移除这一行
 				sqlLines = sqlLines[:len(sqlLines)-1]
+				fmt.Printf("⚠️  [SQL解析] 第%d行: 不是SQL行，已移除\n", i+1)
 				break
 			}
 		}
 	}
 
 	if len(sqlLines) == 0 {
+		fmt.Println("❌ [SQL解析] 未找到有效的SQL语句")
 		return "", errors.New("未找到有效的SQL语句")
 	}
 
 	sql := strings.Join(sqlLines, "\n")
 	sql = strings.TrimSuffix(sql, ";")
+
+	fmt.Printf("✅ [SQL解析] 最终SQL: %q\n", sql)
 
 	return sql, nil
 }

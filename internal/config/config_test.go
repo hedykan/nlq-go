@@ -195,8 +195,8 @@ func TestConfig_DefaultValues(t *testing.T) {
 	if cfg.LLM.Provider != "zhipuai" {
 		t.Errorf("期望默认 Provider 为 zhipuai, 实际为 %s", cfg.LLM.Provider)
 	}
-	if cfg.LLM.Model != "glm-4-plus" {
-		t.Errorf("期望默认 Model 为 glm-4-plus, 实际为 %s", cfg.LLM.Model)
+	if cfg.LLM.Model != "glm-4.7" {
+		t.Errorf("期望默认 Model 为 glm-4.7, 实际为 %s", cfg.LLM.Model)
 	}
 	if cfg.LLM.MaxRetries != 3 {
 		t.Errorf("期望默认 MaxRetries 为 3, 实际为 %d", cfg.LLM.MaxRetries)

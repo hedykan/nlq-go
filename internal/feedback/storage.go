@@ -1,11 +1,11 @@
 package feedback
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/channelwill/nlq/pkg/utils"
 )
 
 // Storage 反馈存储接口
@@ -50,7 +50,7 @@ func (m *MockStorage) Save(record *FeedbackRecord) error {
 	defer m.mu.Unlock()
 
 	if record.ID == "" {
-		record.ID = generateID()
+		record.ID = utils.GenerateFeedbackID()
 	}
 	if record.Timestamp.IsZero() {
 		record.Timestamp = time.Now()
@@ -149,16 +149,4 @@ func (m *MockStorage) Clear() {
 
 	m.records = make(map[string]*FeedbackRecord)
 	m.queryContexts = make(map[string]*QueryContext)
-}
-
-// generateID 生成唯一ID（使用加密随机数确保唯一性）
-func generateID() string {
-	// 生成8字节的随机数
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		// 如果随机数生成失败，回退到时间戳+计数器的方式
-		return fmt.Sprintf("fb_%d_%d", time.Now().UnixNano(), time.Now().Nanosecond())
-	}
-	// 转换为16字符的十六进制字符串
-	return fmt.Sprintf("fb_%s", hex.EncodeToString(b))
 }

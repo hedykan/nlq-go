@@ -19,6 +19,7 @@ import (
 	"github.com/channelwill/nlq/internal/knowledge"
 	"github.com/channelwill/nlq/internal/server"
 	"github.com/channelwill/nlq/internal/sanitizer"
+	"github.com/channelwill/nlq/pkg/utils"
 )
 
 // TestIntegration_CompleteFeedbackFlow 测试完整的反馈流程
@@ -45,7 +46,7 @@ func TestIntegration_CompleteFeedbackFlow(t *testing.T) {
 
 	t.Run("完整流程：查询→反馈→合并", func(t *testing.T) {
 		// 步骤1: 模拟查询并生成query_id
-		queryID := server.GenerateQueryID()
+		queryID := utils.GenerateQueryID()
 		t.Logf("生成的QueryID: %s", queryID)
 
 		// 步骤2: 创建查询上下文
@@ -101,7 +102,7 @@ func TestIntegration_DataSanitizationFlow(t *testing.T) {
 	collector := feedback.NewCollector(storage)
 
 	// 创建包含敏感信息的查询上下文
-	queryID := server.GenerateQueryID()
+	queryID := utils.GenerateQueryID()
 	queryContext := &feedback.QueryContext{
 		QueryID:   queryID,
 		Question: "联系test@example.com或13812345678",
@@ -238,7 +239,7 @@ func TestIntegration_ConcurrentFeedback(t *testing.T) {
 
 			for j := 0; j < feedbacksPerGoroutine; j++ {
 				// 直接使用GenerateQueryID生成符合格式的query_id
-				queryID := server.GenerateQueryID()
+				queryID := utils.GenerateQueryID()
 
 				queryContext := &feedback.QueryContext{
 					QueryID:   queryID,
@@ -325,7 +326,7 @@ func TestIntegration_Performance(t *testing.T) {
 
 	// 测试收集性能
 	t.Run("收集性能", func(t *testing.T) {
-		queryID := server.GenerateQueryID()
+		queryID := utils.GenerateQueryID()
 		queryContext := &feedback.QueryContext{
 			QueryID:   queryID,
 			Question: "测试性能查询",
@@ -461,7 +462,7 @@ func TestIntegration_QueryIDGeneration(t *testing.T) {
 		iterations := 1000
 
 		for i := 0; i < iterations; i++ {
-			id := server.GenerateQueryID()
+			id := utils.GenerateQueryID()
 
 			// 验证格式
 			if !strings.HasPrefix(id, "qry_") {
@@ -480,7 +481,7 @@ func TestIntegration_QueryIDGeneration(t *testing.T) {
 	})
 
 	t.Run("验证QueryID格式", func(t *testing.T) {
-		id := server.GenerateQueryID()
+		id := utils.GenerateQueryID()
 
 		// 格式: qry_YYYYMMDD_XXXXXXXX
 		parts := strings.Split(id, "_")
@@ -558,7 +559,7 @@ func TestIntegration_HTTPQueryWithFeedback(t *testing.T) {
 
 	t.Run("反馈提交流程", func(t *testing.T) {
 		// 先执行查询获取query_id
-		queryID := server.GenerateQueryID()
+		queryID := utils.GenerateQueryID()
 
 		queryContext := &feedback.QueryContext{
 			QueryID:   queryID,
@@ -712,7 +713,7 @@ type MockQueryHandlerWithStorage struct {
 
 func (m *MockQueryHandlerWithStorage) Handle(ctx context.Context, question string) (*handler.QueryResult, error) {
 	// 生成queryID（模拟服务器行为）
-	m.lastQueryID = server.GenerateQueryID()
+	m.lastQueryID = utils.GenerateQueryID()
 
 	return &handler.QueryResult{
 		Question: question,

@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,6 +18,7 @@ import (
 	"github.com/channelwill/nlq/internal/handler"
 	"github.com/channelwill/nlq/internal/knowledge"
 	"github.com/channelwill/nlq/internal/sql"
+	"github.com/channelwill/nlq/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -269,7 +268,7 @@ func queryDirectly(question string) error {
 		os.Exit(1)
 	}
 
-	queryHandler := handler.NewQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL)
+	queryHandler := handler.NewQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model)
 	if verbose {
 		fmt.Printf("🤖 使用GLM4.7 LLM: %s\n", cfg.LLM.Model)
 	}
@@ -433,7 +432,7 @@ func displayServerResultTable(rows []map[string]interface{}, totalCount int) {
 	printTableLine(columns, widths, "┌", "┬", "┐")
 	fmt.Print("│")
 	for i, col := range columns {
-		fmt.Printf(" %-*s │", widths[i], truncateString(col, widths[i]))
+		fmt.Printf(" %-*s │", widths[i], utils.TruncateString(col, widths[i]))
 	}
 	fmt.Println()
 	printTableLine(columns, widths, "├", "┼", "┤")
@@ -443,13 +442,13 @@ func displayServerResultTable(rows []map[string]interface{}, totalCount int) {
 		fmt.Print("│")
 		for j, col := range columns {
 			val := formatValue(rows[i][col])
-			fmt.Printf(" %-*s │", widths[j], truncateString(val, widths[j]))
+			fmt.Printf(" %-*s │", widths[j], utils.TruncateString(val, widths[j]))
 		}
 		fmt.Println()
 	}
 
 	if len(rows) > maxRows {
-		fmt.Printf("│ %s │\n", truncateString(
+		fmt.Printf("│ %s │\n", utils.TruncateString(
 			fmt.Sprintf("... 还有 %d 行", len(rows)-maxRows),
 			sumWidths(widths)+2*len(columns)-1,
 		))
@@ -573,52 +572,16 @@ func runSchema(cmd *cobra.Command, args []string) error {
 
 // loadConfig 加载配置
 func loadConfig() (*config.Config, error) {
-	cfg := &config.Config{}
-	cfg.SetDefaults()
-
-	// 如果指定了配置文件，从文件加载
-	if configFile != "" {
-		loadedCfg, err := config.LoadFromFile(configFile)
-		if err != nil {
-			return nil, err
-		}
-		cfg = loadedCfg
+	// 确定配置文件路径
+	configPath := configFile
+	if configPath == "" {
+		configPath = "config/config.yaml"
 	}
 
-	// 尝试从配置文件加载（默认路径）
-	if configFile == "" {
-		defaultConfigFile := "config/config.yaml"
-		if _, err := os.Stat(defaultConfigFile); err == nil {
-			// 配置文件存在，从文件加载
-			loadedCfg, err := config.LoadFromFile(defaultConfigFile)
-			if err == nil {
-				cfg = loadedCfg
-			}
-		}
-	}
-
-	// 如果没有配置文件，使用默认配置（连接到本地Docker MySQL）
-	if configFile == "" {
-		cfg.Database.Host = "localhost"
-		cfg.Database.Port = 3306
-		cfg.Database.Database = "loloyal"
-		cfg.Database.Username = "root"
-		cfg.Database.Password = "root"
-		cfg.Database.Readonly = true
-	}
-
-	// 尝试从环境变量覆盖（优先级最高）
-	if apiKey := os.Getenv("GLM_API_KEY"); apiKey != "" {
-		cfg.LLM.APIKey = apiKey
-	}
-	if dbHost := os.Getenv("DATABASE_HOST"); dbHost != "" {
-		cfg.Database.Host = dbHost
-	}
-	if dbPort := os.Getenv("DATABASE_PORT"); dbPort != "" {
-		fmt.Sscanf(dbPort, "%d", &cfg.Database.Port)
-	}
-	if dbName := os.Getenv("DATABASE_NAME"); dbName != "" {
-		cfg.Database.Database = dbName
+	// 使用viper加载配置（支持配置文件、环境变量、默认值）
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("加载配置失败: %w", err)
 	}
 
 	return cfg, nil
@@ -791,7 +754,7 @@ func displayPrettyTable(result *sql.ExecuteResult, columns []string, maxRows int
 	fmt.Print("│")
 	for i, col := range columns {
 		width := columnWidths[i]
-		fmt.Printf(" %-*s │", width, truncateString(col, width))
+		fmt.Printf(" %-*s │", width, utils.TruncateString(col, width))
 	}
 	fmt.Println()
 
@@ -804,13 +767,13 @@ func displayPrettyTable(result *sql.ExecuteResult, columns []string, maxRows int
 		for j, col := range columns {
 			width := columnWidths[j]
 			val := formatValue(result.Rows[i][col])
-			fmt.Printf(" %-*s │", width, truncateString(val, width))
+			fmt.Printf(" %-*s │", width, utils.TruncateString(val, width))
 		}
 		fmt.Println()
 	}
 
 	if len(result.Rows) > maxRows {
-		fmt.Printf("│ %s │\n", truncateString(
+		fmt.Printf("│ %s │\n", utils.TruncateString(
 			fmt.Sprintf("... 还有 %d 行", len(result.Rows)-maxRows),
 			sumWidths(columnWidths)+2*len(columns)-1,
 		))
@@ -951,10 +914,10 @@ func displayTableSchema(table database.TableSchema) {
 		}
 
 		fmt.Printf("│ %-18s │ %-16s │ %-8s │ %-10s │\n",
-			truncateString(col.Name, 18),
-			truncateString(col.Type, 16),
+			utils.TruncateString(col.Name, 18),
+			utils.TruncateString(col.Type, 16),
 			nullable,
-			truncateString(comment, 10),
+			utils.TruncateString(comment, 10),
 		)
 	}
 
@@ -971,12 +934,7 @@ func startsWith(s, prefix string) bool {
 	return strings.HasPrefix(s, prefix)
 }
 
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
-}
+// loadKnowledgeBase 加载知识库并设置到查询处理器
 
 // loadKnowledgeBase 加载知识库并设置到查询处理器
 func loadKnowledgeBase(queryHandler *handler.QueryHandler, knowledgePath string, verbose bool) error {
@@ -1107,15 +1065,6 @@ func displayFeedbackHint(queryID string) {
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 }
 
-// generateQueryID 生成查询唯一标识
-func generateQueryID() string {
-	date := time.Now().Format("20060102")
-	randomBytes := make([]byte, 4)
-	if _, err := rand.Read(randomBytes); err != nil {
-		return fmt.Sprintf("qry_%s_%d", date, time.Now().UnixNano()%100000000)
-	}
-	return fmt.Sprintf("qry_%s_%s", date, hex.EncodeToString(randomBytes)[:8])
-}
 
 // recordExecutionError 记录SQL执行错误到服务器
 func recordExecutionError(question, sql, errorMsg string) {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/channelwill/nlq/internal/sanitizer"
+	"github.com/channelwill/nlq/pkg/utils"
 )
 
 // Collector 反馈收集器
@@ -53,7 +54,7 @@ func (c *Collector) Collect(req FeedbackRequest) error {
 
 	// 创建反馈记录
 	record := &FeedbackRecord{
-		ID:           generateID(),
+		ID:           utils.GenerateFeedbackID(),
 		QueryID:      req.QueryID,
 		Question:     c.sanitizeQuestion(context.Question),
 		GeneratedSQL: c.sanitizeSQL(context.SQL),

@@ -8,7 +8,7 @@ import (
 
 // TestGLMClient_NewGLMClient 测试创建GLM客户端
 func TestGLMClient_NewGLMClient(t *testing.T) {
-	client := NewGLMClient("test-api-key", "https://api.example.com")
+	client := NewGLMClient("test-api-key", "https://api.example.com", "glm-4-plus")
 	if client == nil {
 		t.Fatal("期望返回非nil的客户端")
 	}
@@ -26,7 +26,7 @@ func TestGLMClient_GenerateSQL(t *testing.T) {
 		t.Skip("需要设置真实的API Key来运行此测试")
 	}
 
-	client := NewGLMClient(apiKey, "https://open.bigmodel.cn/api/paas/v4/")
+	client := NewGLMClient(apiKey, "https://open.bigmodel.cn/api/paas/v4/", "glm-4-plus")
 
 	schema := "数据库Schema:\n表: users\n  - id: int\n  - name: varchar\n  - email: varchar"
 	question := "查询所有用户的数量"
@@ -59,7 +59,7 @@ func TestGLMClient_GenerateSQL_WithRealAPI(t *testing.T) {
 		t.Skip("需要设置GLM_API_KEY环境变量")
 	}
 
-	client := NewGLMClient(apiKey, "https://open.bigmodel.cn/api/paas/v4/")
+	client := NewGLMClient(apiKey, "https://open.bigmodel.cn/api/paas/v4/", "glm-4-plus")
 
 	schema := `数据库Schema:
 

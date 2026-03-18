@@ -7,6 +7,7 @@ import (
 	"github.com/channelwill/nlq/internal/config"
 	"github.com/channelwill/nlq/internal/database"
 	"github.com/channelwill/nlq/pkg/security"
+	"github.com/channelwill/nlq/pkg/utils"
 )
 
 func main() {
@@ -75,8 +76,8 @@ func main() {
 			nullable = "NULL"
 		}
 		fmt.Printf("   │ %-18s │ %-16s │ %-8s │\n",
-			truncateString(col.Name, 18),
-			truncateString(col.Type, 16),
+			utils.TruncateString(col.Name, 18),
+			utils.TruncateString(col.Type, 16),
 			nullable,
 		)
 	}
@@ -180,7 +181,7 @@ func main() {
 	fmt.Println("   尝试执行危险SQL:")
 	for _, sql := range dangerousSQLs {
 		if err := firewall.Check(sql); err != nil {
-			fmt.Printf("   ❌ 拒绝: %s\n", truncateString(sql, 45))
+			fmt.Printf("   ❌ 拒绝: %s\n", utils.TruncateString(sql, 45))
 		}
 	}
 
@@ -202,11 +203,4 @@ func main() {
 	fmt.Printf("  • 数据库: %s\n", cfg.Database)
 	fmt.Printf("  • 查询耗时: < 100ms (本地)\n")
 	fmt.Println()
-}
-
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/channelwill/nlq/internal/knowledge"
 	"github.com/channelwill/nlq/internal/llm"
 	"github.com/channelwill/nlq/internal/sql"
+	"github.com/channelwill/nlq/pkg/utils"
 	"gorm.io/gorm"
 )
 
@@ -57,95 +58,147 @@ func NewTwoPhaseQueryHandler(parser *database.SchemaParser, dbGORM *gorm.DB, llm
 		db:            parser,
 		dbGORM:        dbGORM,
 		llmClient:     llmClient,
-		tableSelector: NewTableSelector(llmClient),
+		tableSelector: NewTableSelector(llmClient, nil), // 使用默认字段别名
 		schemaBuilder: NewSchemaBuilder(parser),
 		executor:      sql.NewExecutor(dbGORM),
 	}
 }
 
-// Handle 两阶段处理流程
+// NewTwoPhaseQueryHandlerWithAliases 创建两阶段查询处理器（支持自定义字段别名）
+func NewTwoPhaseQueryHandlerWithAliases(parser *database.SchemaParser, dbGORM *gorm.DB, llmClient LLMClient, fieldAliasMap map[string][]string) *TwoPhaseQueryHandler {
+	return &TwoPhaseQueryHandler{
+		db:            parser,
+		dbGORM:        dbGORM,
+		llmClient:     llmClient,
+		tableSelector: NewTableSelector(llmClient, fieldAliasMap),
+		schemaBuilder: NewSchemaBuilder(parser),
+		executor:      sql.NewExecutor(dbGORM),
+	}
+}
+
+// Handle 两阶段处理流程（主方法，简化版）
 func (h *TwoPhaseQueryHandler) Handle(ctx context.Context, question string) (*QueryResult, error) {
 	start := time.Now()
 
 	// 阶段1: 选择相关表
-	selection, err := h.tableSelector.SelectTables(ctx, question, h.db)
+	utils.Info("   └─ 📊 [阶段1] 开始选择相关表...")
+	selection, err := h.selectTablesForQuery(ctx, question)
 	if err != nil {
-		return &QueryResult{
-			Error: fmt.Sprintf("表选择失败: %v", err),
-		}, err
+		utils.Error("   └─ ❌ [阶段1] 表选择失败: %v", err)
+		return h.buildErrorResult(err, "表选择失败"), err
 	}
+
+	utils.Info("   └─ ✅ [阶段1] 表选择完成 | 主要表: %v | 次要表: %v",
+		selection.PrimaryTables, selection.SecondaryTables)
 
 	// 检查是否需要字段澄清
 	if selection.FieldClarification != nil {
-		// 返回字段澄清信息，不执行SQL生成
-		return &QueryResult{
-			Question:           question,
-			FieldClarification: selection.FieldClarification,
-			Duration:           time.Since(start),
-			Metadata: map[string]interface{}{
-				"primary_tables":        selection.PrimaryTables,
-				"secondary_tables":      selection.SecondaryTables,
-				"reasoning":             selection.Reasoning,
-				"mode":                  "two_phase",
-				"needs_clarification":   true,
-			},
-		}, nil
+		utils.Warn("   └─ ⚠️  [阶段1] 需要字段澄清: %s", selection.FieldClarification.AmbiguousField)
+		return h.buildClarificationResult(question, selection, start), nil
 	}
 
-	// 阶段2: 构建相关表的Schema
+	// 阶段2-3: 构建Schema并生成SQL
+	utils.Info("   └─ 📝 [阶段2-3] 构建Schema并生成SQL...")
+	sql, err := h.generateSQLForQuery(ctx, question, selection)
+	if err != nil {
+		utils.Error("   └─ ❌ [阶段2-3] SQL生成失败: %v", err)
+		return h.buildErrorResult(err, "SQL生成失败"), err
+	}
+
+	utils.Info("   └─ ✅ [阶段2-3] SQL生成成功 | SQL: %s", sql)
+
+	// 阶段4-5: 验证并执行SQL
+	utils.Info("   └─ 🔍 [阶段4] 验证SQL...")
+	result, err := h.executeSQLQuery(ctx, question, sql, selection)
+	if err != nil {
+		utils.Error("   └─ ❌ [阶段4-5] SQL执行失败: %v", err)
+		return result, err
+	}
+
+	utils.Info("   └─ ✅ [阶段5] SQL执行成功 | 返回 %d 行",
+		func() int { if result.Result != nil { return result.Result.Count } else { return 0 } }())
+
+	result.Duration = time.Since(start)
+	return result, nil
+}
+
+// selectTablesForQuery 阶段1: 选择相关表
+func (h *TwoPhaseQueryHandler) selectTablesForQuery(ctx context.Context, question string) (*TableSelection, error) {
+	return h.tableSelector.SelectTables(ctx, question, h.db)
+}
+
+// generateSQLForQuery 阶段2-3: 构建Schema并生成SQL
+func (h *TwoPhaseQueryHandler) generateSQLForQuery(ctx context.Context, question string, selection *TableSelection) (string, error) {
 	schema := h.schemaBuilder.BuildSchema(selection.PrimaryTables, selection.SecondaryTables)
+	return h.llmClient.GenerateSQL(ctx, schema, question)
+}
 
-	// 阶段3: 生成SQL（使用精准的Schema）
-	generatedSQL, err := h.llmClient.GenerateSQL(ctx, schema, question)
-	if err != nil {
-		return &QueryResult{
-			Error: fmt.Sprintf("SQL生成失败: %v", err),
-		}, err
-	}
-
-	// 阶段4: 验证SQL
-	if err := h.executor.ValidateOnly(generatedSQL); err != nil {
+// executeSQLQuery 阶段4-5: 验证并执行SQL
+func (h *TwoPhaseQueryHandler) executeSQLQuery(ctx context.Context, question, sql string, selection *TableSelection) (*QueryResult, error) {
+	if err := h.executor.ValidateOnly(sql); err != nil {
 		return &QueryResult{
 			Question: question,
-			SQL:      generatedSQL,
+			SQL:      sql,
 			Error:    fmt.Sprintf("SQL验证失败: %v", err),
-			Metadata: map[string]interface{}{
-				"primary_tables":   selection.PrimaryTables,
-				"secondary_tables": selection.SecondaryTables,
-				"reasoning":        selection.Reasoning,
-				"mode":             "two_phase",
-			},
+			Metadata: h.buildMetadata(selection, nil),
 		}, err
 	}
 
-	// 阶段5: 执行SQL
-	execResult, err := h.executor.Execute(ctx, generatedSQL)
+	execResult, err := h.executor.Execute(ctx, sql)
 	if err != nil {
 		return &QueryResult{
 			Question: question,
-			SQL:      generatedSQL,
+			SQL:      sql,
 			Error:    fmt.Sprintf("执行SQL失败: %v", err),
-			Metadata: map[string]interface{}{
-				"primary_tables":   selection.PrimaryTables,
-				"secondary_tables": selection.SecondaryTables,
-				"reasoning":        selection.Reasoning,
-				"mode":             "two_phase",
-			},
+			Metadata: h.buildMetadata(selection, nil),
 		}, err
 	}
 
 	return &QueryResult{
 		Question: question,
-		SQL:      generatedSQL,
+		SQL:      sql,
 		Result:   execResult,
-		Duration: time.Since(start),
-		Metadata: map[string]interface{}{
-			"primary_tables":   selection.PrimaryTables,
-			"secondary_tables": selection.SecondaryTables,
-			"reasoning":        selection.Reasoning,
-			"mode":             "two_phase",
-		},
+		Metadata: h.buildMetadata(selection, nil),
 	}, nil
+}
+
+// buildErrorResult 构建错误结果
+func (h *TwoPhaseQueryHandler) buildErrorResult(err error, message string) *QueryResult {
+	return &QueryResult{
+		Error: fmt.Sprintf("%s: %v", message, err),
+	}
+}
+
+// buildClarificationResult 构建字段澄清结果
+func (h *TwoPhaseQueryHandler) buildClarificationResult(question string, selection *TableSelection, start time.Time) *QueryResult {
+	return &QueryResult{
+		Question:           question,
+		FieldClarification: selection.FieldClarification,
+		Duration:           time.Since(start),
+		Metadata: map[string]interface{}{
+			"primary_tables":      selection.PrimaryTables,
+			"secondary_tables":    selection.SecondaryTables,
+			"reasoning":           selection.Reasoning,
+			"mode":                "two_phase",
+			"needs_clarification": true,
+		},
+	}
+}
+
+// buildMetadata 构建元数据
+func (h *TwoPhaseQueryHandler) buildMetadata(selection *TableSelection, extra map[string]interface{}) map[string]interface{} {
+	metadata := map[string]interface{}{
+		"primary_tables":   selection.PrimaryTables,
+		"secondary_tables": selection.SecondaryTables,
+		"reasoning":        selection.Reasoning,
+		"mode":             "two_phase",
+	}
+
+	for k, v := range extra {
+		metadata[k] = v
+	}
+
+	return metadata
 }
 
 // HandleWithSQL 直接使用SQL查询
@@ -193,19 +246,24 @@ func (h *TwoPhaseQueryHandler) SetKnowledge(docs []knowledge.Document) error {
 }
 
 // NewTableSelector 创建表选择器
-func NewTableSelector(llmClient LLMClient) *TableSelector {
+func NewTableSelector(llmClient LLMClient, fieldAliasMap map[string][]string) *TableSelector {
 	// 创建示例仓库（使用data目录）
 	dataPath := "./data"
 	exampleRepo := llm.NewExampleRepository(dataPath)
 
+	// 如果没有提供字段别名映射，使用默认值
+	if fieldAliasMap == nil {
+		fieldAliasMap = initializeFieldAliasMap()
+	}
+
 	return &TableSelector{
 		llmClient:     llmClient,
 		exampleRepo:   exampleRepo,
-		fieldAliasMap: initializeFieldAliasMap(),
+		fieldAliasMap: fieldAliasMap,
 	}
 }
 
-// initializeFieldAliasMap 初始化字段别名映射
+// initializeFieldAliasMap 初始化字段别名映射（默认值）
 func initializeFieldAliasMap() map[string][]string {
 	return map[string][]string{
 		"name":     {"username", "shop_name", "customer_name", "first_name", "last_name", "full_name"},

@@ -7,6 +7,7 @@ import (
 	"github.com/channelwill/nlq/internal/config"
 	"github.com/channelwill/nlq/internal/database"
 	"github.com/channelwill/nlq/pkg/security"
+	"github.com/channelwill/nlq/pkg/utils"
 	"gorm.io/gorm"
 )
 
@@ -168,10 +169,10 @@ func demoSchemaParsing(db *gorm.DB) {
 			comment = comment[:10] + "..."
 		}
 		fmt.Printf("   │ %-18s │ %-16s │ %-8s │ %-10s │\n",
-			truncateString(col.Name, 18),
-			truncateString(col.Type, 16),
+			utils.TruncateString(col.Name, 18),
+			utils.TruncateString(col.Type, 16),
 			nullable,
-			truncateString(comment, 10),
+			utils.TruncateString(comment, 10),
 		)
 	}
 	fmt.Println("   └────────────────────┴──────────────────┴──────────┴────────────┘")
@@ -190,7 +191,7 @@ func demoSchemaParsing(db *gorm.DB) {
 		log.Printf("⚠️  格式化Prompt失败: %v", err)
 	} else {
 		fmt.Printf("\n   ✓ 生成LLM Prompt（前200字符）:\n")
-		fmt.Printf("   %s\n", truncateString(prompt, 200)+"...")
+		fmt.Printf("   %s\n", utils.TruncateString(prompt, 200)+"...")
 	}
 
 	fmt.Println("\n✅ Schema解析模块工作正常！")
@@ -233,7 +234,7 @@ func demoSQLFirewall() {
 		}
 
 		// 截断SQL显示
-		sqlDisplay := truncateString(tc.sql, 50)
+		sqlDisplay := utils.TruncateString(tc.sql, 50)
 		fmt.Printf("   │ %-55s │ %-8s │\n", sqlDisplay, result)
 	}
 
@@ -246,12 +247,4 @@ func demoSQLFirewall() {
 	fmt.Printf("   • 测试通过率: %d/%d\n", passCount, len(testCases))
 
 	fmt.Println("\n✅ SQL防火墙模块工作正常！")
-}
-
-// truncateString 截断字符串
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }

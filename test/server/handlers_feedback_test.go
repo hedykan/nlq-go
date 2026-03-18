@@ -13,6 +13,7 @@ import (
 	"github.com/channelwill/nlq/internal/handler"
 	"github.com/channelwill/nlq/internal/knowledge"
 	"github.com/channelwill/nlq/internal/server"
+	"github.com/channelwill/nlq/pkg/utils"
 )
 
 // TestHandleQuery_WithFeedbackLinks 测试查询响应包含反馈链接
@@ -211,7 +212,7 @@ func TestGenerateQueryID(t *testing.T) {
 	// 生成多个ID，检查格式
 	ids := make(map[string]bool)
 	for i := 0; i < 100; i++ {
-		id := server.GenerateQueryID()
+		id := utils.GenerateQueryID()
 
 		// 检查格式
 		if len(id) < 15 {
@@ -245,7 +246,7 @@ type MockQueryHandler struct {
 
 // Handle 模拟查询处理
 func (m *MockQueryHandler) Handle(ctx context.Context, question string) (*handler.QueryResult, error) {
-	m.queryID = server.GenerateQueryID()
+	m.queryID = utils.GenerateQueryID()
 
 	return &handler.QueryResult{
 		Question: question,

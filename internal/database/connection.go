@@ -56,10 +56,20 @@ func buildDSN(cfg *config.DatabaseConfig) string {
 		cfg.Database,
 	)
 
-	// 添加参数
+	// 使用配置的超时时间，如果没有配置则使用默认值
 	params := "charset=utf8mb4&parseTime=True&loc=Local"
-	params += "&readTimeout=30s"  // 读取超时
-	params += "&timeout=10s"      // 连接超时
+
+	readTimeout := cfg.ReadTimeout
+	if readTimeout == 0 {
+		readTimeout = 30 * time.Second // 默认30秒
+	}
+	params += fmt.Sprintf("&readTimeout=%s", readTimeout)
+
+	connectTimeout := cfg.ConnectTimeout
+	if connectTimeout == 0 {
+		connectTimeout = 10 * time.Second // 默认10秒
+	}
+	params += fmt.Sprintf("&timeout=%s", connectTimeout)
 
 	return dsn + params
 }

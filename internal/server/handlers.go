@@ -2,8 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -14,6 +12,14 @@ import (
 	"github.com/channelwill/nlq/internal/feedback"
 	"github.com/channelwill/nlq/internal/handler"
 	"github.com/channelwill/nlq/internal/knowledge"
+	"github.com/channelwill/nlq/pkg/utils"
+)
+
+const (
+	// 上下文键
+	requestIDKey    = "requestID"
+	httpLoggerKey   = "httpLogger"
+	requestTimeKey  = "startTime"
 )
 
 // QueryHandler 查询请求处理器
@@ -118,6 +124,24 @@ func NewQueryHandlerWithFeedback(h QueryHandlerInterface, storage feedback.Stora
 
 // HandleQuery 处理自然语言查询
 func (h *QueryHandler) HandleQuery(w http.ResponseWriter, r *http.Request) {
+	// 获取日志记录器和请求ID
+	var httpLogger *utils.HTTPRequestLogger
+	var requestID string
+
+	if logger, ok := r.Context().Value(httpLoggerKey).(*utils.HTTPRequestLogger); ok {
+		httpLogger = logger
+	}
+	if rid, ok := r.Context().Value(requestIDKey).(string); ok {
+		requestID = rid
+	}
+
+	// 阶段1: 请求解析
+	if httpLogger != nil && requestID != "" {
+		httpLogger.LogRequestStage(requestID, "1.请求解析", map[string]interface{}{
+			"handler": "QueryHandler.HandleQuery",
+		})
+	}
+
 	// 设置CORS头
 	h.setCORSHeaders(w)
 
@@ -140,6 +164,15 @@ func (h *QueryHandler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 记录解析结果
+	if httpLogger != nil && requestID != "" {
+		httpLogger.LogRequestStage(requestID, "2.请求验证", map[string]interface{}{
+			"question":       request.Question,
+			"knowledge_base": request.KnowledgeBase,
+			"verbose":        request.Verbose,
+		})
+	}
+
 	// 加载知识库（如果指定）
 	if request.KnowledgeBase != "" {
 		if err := h.loadKnowledgeBase(request.KnowledgeBase); err != nil && request.Verbose {
@@ -148,11 +181,25 @@ func (h *QueryHandler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 记录开始执行查询
+	if httpLogger != nil && requestID != "" {
+		httpLogger.LogRequestStage(requestID, "3.开始查询", map[string]interface{}{
+			"question": request.Question,
+		})
+	}
+
 	// 执行查询
 	ctx := r.Context()
 	result, err := h.queryHandler.Handle(ctx, request.Question)
 
 	if err != nil {
+		// 记录查询失败
+		if httpLogger != nil && requestID != "" {
+			httpLogger.LogRequestStage(requestID, "4.查询失败", map[string]interface{}{
+				"error": err.Error(),
+			})
+		}
+
 		// 如果执行错误，自动记录到负面反馈池
 		if h.feedbackHandler != nil {
 			errorMsg := err.Error()
@@ -184,8 +231,17 @@ func (h *QueryHandler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 记录查询成功
+	if httpLogger != nil && requestID != "" {
+		httpLogger.LogRequestStage(requestID, "4.查询成功", map[string]interface{}{
+			"sql":         result.SQL,
+			"duration_ms": result.Duration.Milliseconds(),
+			"row_count":   func() int { if result.Result != nil { return result.Result.Count } else { return 0 } }(),
+		})
+	}
+
 	// 生成QueryID
-	queryID := GenerateQueryID()
+	queryID := utils.GenerateQueryID()
 
 	// 存储查询上下文（供反馈使用）
 	queryContext := &feedback.QueryContext{
@@ -219,12 +275,38 @@ func (h *QueryHandler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 记录响应构建
+	if httpLogger != nil && requestID != "" {
+		httpLogger.LogRequestStage(requestID, "5.构建响应", map[string]interface{}{
+			"query_id": queryID,
+			"success":  true,
+		})
+	}
+
 	// 发送JSON响应
 	h.sendJSONResponse(w, response, http.StatusOK)
 }
 
 // HandleSQL 处理SQL查询
 func (h *QueryHandler) HandleSQL(w http.ResponseWriter, r *http.Request) {
+	// 获取日志记录器和请求ID
+	var httpLogger *utils.HTTPRequestLogger
+	var requestID string
+
+	if logger, ok := r.Context().Value(httpLoggerKey).(*utils.HTTPRequestLogger); ok {
+		httpLogger = logger
+	}
+	if rid, ok := r.Context().Value(requestIDKey).(string); ok {
+		requestID = rid
+	}
+
+	// 阶段1: 请求解析
+	if httpLogger != nil && requestID != "" {
+		httpLogger.LogRequestStage(requestID, "1.请求解析", map[string]interface{}{
+			"handler": "QueryHandler.HandleSQL",
+		})
+	}
+
 	// 设置CORS头
 	h.setCORSHeaders(w)
 
@@ -247,13 +329,38 @@ func (h *QueryHandler) HandleSQL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 记录解析结果
+	if httpLogger != nil && requestID != "" {
+		httpLogger.LogRequestStage(requestID, "2.请求验证", map[string]interface{}{
+			"sql": request.SQL,
+		})
+	}
+
 	// 执行SQL查询
+	if httpLogger != nil && requestID != "" {
+		httpLogger.LogRequestStage(requestID, "3.开始执行SQL", nil)
+	}
+
 	ctx := r.Context()
 	result, err := h.queryHandler.HandleWithSQL(ctx, request.SQL)
 
 	if err != nil {
+		// 记录执行失败
+		if httpLogger != nil && requestID != "" {
+			httpLogger.LogRequestStage(requestID, "4.执行失败", map[string]interface{}{
+				"error": err.Error(),
+			})
+		}
 		h.sendErrorResponse(w, "SQL执行失败: "+err.Error(), "sql_failed", http.StatusInternalServerError)
 		return
+	}
+
+	// 记录执行成功
+	if httpLogger != nil && requestID != "" {
+		httpLogger.LogRequestStage(requestID, "4.执行成功", map[string]interface{}{
+			"duration_ms": result.Duration.Milliseconds(),
+			"row_count":   result.Result.Count,
+		})
 	}
 
 	// 构建响应
@@ -429,20 +536,4 @@ func (h *QueryHandler) generateFeedbackLinks(queryID string, r *http.Request) *F
 		NegativeURL: fmt.Sprintf("%s/feedback/negative/%s", baseURL, queryID),
 		ExpiresAt:   time.Now().Add(24 * time.Hour).Unix(),
 	}
-}
-
-// GenerateQueryID 生成查询唯一标识
-// 格式: qry_{YYYYMMDD}_{随机8位字符}
-func GenerateQueryID() string {
-	date := time.Now().Format("20060102")
-
-	// 生成8位随机字符
-	randomBytes := make([]byte, 4)
-	if _, err := rand.Read(randomBytes); err != nil {
-		// 如果随机生成失败，使用时间戳
-		return fmt.Sprintf("qry_%s_%d", date, time.Now().UnixNano()%100000000)
-	}
-	randomStr := hex.EncodeToString(randomBytes)[:8]
-
-	return fmt.Sprintf("qry_%s_%s", date, randomStr)
 }

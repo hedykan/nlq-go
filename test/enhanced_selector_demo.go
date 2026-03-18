@@ -72,7 +72,7 @@ func main() {
 
 	// 测试3：字段别名映射
 	fmt.Println("\n=== 测试3：字段别名映射 ===")
-	_ = handler.NewTableSelector(nil)
+	_ = handler.NewTableSelector(nil, nil)
 	fmt.Println("字段别名映射已初始化")
 
 	// 测试4：两阶段查询（需要Mock LLM）
