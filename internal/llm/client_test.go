@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -29,11 +30,13 @@ func TestGLMClient_GenerateSQL(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	now := time.Now()
 	sql, err := client.GenerateSQL(ctx, schema, question)
 	if err != nil {
 		t.Logf("生成SQL失败（可能是API Key无效）: %v", err)
 		return
 	}
+	fmt.Println(time.Since(now), 1)
 
 	if sql == "" {
 		t.Error("期望返回非空的SQL")

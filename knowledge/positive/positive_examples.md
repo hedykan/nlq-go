@@ -43,3 +43,9 @@ bpr.id;
 **问题**: 100个最早的用户的创建时间
 **SQL**: SELECT created_at FROM boom_user ORDER BY created_at ASC LIMIT 100
 **说明**: 可以，继续保持
+---
+
+## 示例
+**问题**: 查询一下user人数
+**SQL**: SELECT COUNT(*) FROM boom_user
+**说明**: 不错

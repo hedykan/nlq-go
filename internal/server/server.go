@@ -14,13 +14,15 @@ import (
 
 // Server HTTP服务器
 type Server struct {
-	router          *mux.Router
-	server          *http.Server
-	queryHandler    *QueryHandler
-	wsServer        *WebSocketServer
-	feedbackHandler *FeedbackHandler
-	config          *config.Config
-	httpLogger      *utils.HTTPRequestLogger
+	router              *mux.Router
+	server              *http.Server
+	queryHandler        *QueryHandler
+	wsServer            *WebSocketServer
+	feedbackHandler     *FeedbackHandler
+	queryPageHandler    *QueryPageHandler
+	suggestionsHandler  *SuggestionsHandler
+	config              *config.Config
+	httpLogger          *utils.HTTPRequestLogger
 }
 
 // NewServer 创建新的HTTP服务器
@@ -41,14 +43,22 @@ func NewServer(cfg *config.Config, dbHandler QueryHandlerInterface) (*Server, er
 	wsServer := NewWebSocketServer(dbHandler)
 	wsServer.SetFeedbackStorage(feedbackStorage)
 
+	// 创建查询页面处理器
+	queryPageHandler := NewQueryPageHandler(queryHandler)
+
+	// 创建示例问题处理器
+	suggestionsHandler := NewSuggestionsHandler(dbHandler)
+
 	// 配置路由
 	server := &Server{
-		router:          router,
-		queryHandler:    queryHandler,
-		wsServer:        wsServer,
-		feedbackHandler: feedbackHandler,
-		config:          cfg,
-		httpLogger:      utils.NewHTTPRequestLogger(),
+		router:             router,
+		queryHandler:       queryHandler,
+		wsServer:           wsServer,
+		feedbackHandler:    feedbackHandler,
+		queryPageHandler:   queryPageHandler,
+		suggestionsHandler: suggestionsHandler,
+		config:             cfg,
+		httpLogger:         utils.NewHTTPRequestLogger(),
 	}
 
 	server.setupRoutes(router)
@@ -90,6 +100,12 @@ func (s *Server) setupRoutes(router *mux.Router) {
 	// 健康检查和状态
 	api.HandleFunc("/health", s.queryHandler.HealthCheck).Methods("GET")
 	api.HandleFunc("/status", s.queryHandler.Status).Methods("GET")
+
+	// 示例问题
+	api.HandleFunc("/suggestions", s.suggestionsHandler.HandleSuggestions).Methods("GET", "OPTIONS")
+
+	// 查询页面路由
+	router.HandleFunc("/query", s.queryPageHandler.HandleQueryPage).Methods("GET")
 
 	// 反馈相关
 	router.HandleFunc("/feedback/positive/{query_id}", s.feedbackHandler.HandleFeedbackPage).Methods("GET")
