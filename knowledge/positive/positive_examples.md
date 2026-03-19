@@ -49,3 +49,9 @@ bpr.id;
 **问题**: 查询一下user人数
 **SQL**: SELECT COUNT(*) FROM boom_user
 **说明**: 不错
+---
+
+## 示例
+**问题**: boom_user表有多少条数据？
+**SQL**: SELECT COUNT(*) FROM boom_user
+**说明**: 很棒，继续保持
