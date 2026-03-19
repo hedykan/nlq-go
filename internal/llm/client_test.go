@@ -20,13 +20,8 @@ func TestGLMClient_NewGLMClient(t *testing.T) {
 
 // TestGLMClient_GenerateSQL 测试SQL生成（需要真实API Key）
 func TestGLMClient_GenerateSQL(t *testing.T) {
-	// 跳过测试，如果API Key未设置
-	apiKey := "your-api-key-here" // 替换为真实API Key
-	if apiKey == "your-api-key-here" {
-		t.Skip("需要设置真实的API Key来运行此测试")
-	}
-
-	client := NewGLMClient(apiKey, "https://open.bigmodel.cn/api/paas/v4/", "glm-4-plus")
+	// 使用testutil创建测试客户端（从config读取配置）
+	client := CreateTestClient(t)
 
 	schema := "数据库Schema:\n表: users\n  - id: int\n  - name: varchar\n  - email: varchar"
 	question := "查询所有用户的数量"
@@ -53,13 +48,8 @@ func TestGLMClient_GenerateSQL_WithRealAPI(t *testing.T) {
 		t.Skip("跳过需要真实API的测试")
 	}
 
-	// 从环境变量获取API Key
-	apiKey := "test-key" // 替换为真实的API Key
-	if apiKey == "test-key" {
-		t.Skip("需要设置GLM_API_KEY环境变量")
-	}
-
-	client := NewGLMClient(apiKey, "https://open.bigmodel.cn/api/paas/v4/", "glm-4-plus")
+	// 使用testutil创建测试客户端（从config读取配置）
+	client := CreateTestClient(t)
 
 	schema := `数据库Schema:
 
