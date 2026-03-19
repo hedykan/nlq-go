@@ -15,6 +15,7 @@ type Config struct {
 	Security     SecurityConfig     `mapstructure:"security"`
 	Server       ServerConfig       `mapstructure:"server"`
 	FieldAliases FieldAliasConfig   `mapstructure:"field_aliases"` // 字段别名配置
+	Query        QueryConfig        `mapstructure:"query"`         // 查询处理器配置
 }
 
 // DatabaseConfig 数据库配置
@@ -71,6 +72,12 @@ type FieldAliasConfig struct {
 	Time     []string `mapstructure:"time"`     // 时间相关字段别名
 	Status   []string `mapstructure:"status"`   // 状态相关字段别名
 	Price    []string `mapstructure:"price"`    // 价格相关字段别名
+}
+
+// QueryConfig 查询处理器配置
+type QueryConfig struct {
+	Mode            string `mapstructure:"mode"`             // 处理模式: "auto"(自动), "simple"(单步), "two_phase"(两步)
+	TableCountThreshold int  `mapstructure:"table_count_threshold"` // 表数量阈值（自动模式下使用）
 }
 
 // LoadConfig 使用viper加载配置
@@ -165,6 +172,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.read_timeout", 30*time.Second)
 	v.SetDefault("server.write_timeout", 30*time.Second)
 	v.SetDefault("server.enable_cors", true)
+
+	// 查询处理器默认值
+	v.SetDefault("query.mode", "auto")                      // 默认自动模式
+	v.SetDefault("query.table_count_threshold", 20)         // 默认表数量阈值为20
 }
 
 // bindEnvVars 绑定环境变量（向后兼容，支持无前缀的环境变量）

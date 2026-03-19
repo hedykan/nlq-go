@@ -13,6 +13,7 @@ import (
 	"github.com/channelwill/nlq/internal/handler"
 	"github.com/channelwill/nlq/internal/knowledge"
 	"github.com/channelwill/nlq/internal/server"
+	"gorm.io/gorm"
 )
 
 func main() {
@@ -49,9 +50,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 使用两阶段处理器（推荐用于大型数据库）
-	queryHandler := handler.NewTwoPhaseQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model)
-	fmt.Printf("🤖 使用两阶段查询处理器 + GLM4.7 LLM: %s\n", cfg.LLM.Model)
+	// 智能选择查询处理器
+	queryHandler, err := createQueryHandler(db, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "创建查询处理器失败: %v\n", err)
+		os.Exit(1)
+	}
 
 	// 自动加载知识库
 	if err := loadKnowledgeBases(queryHandler); err != nil {
@@ -148,4 +152,68 @@ func loadKnowledgeBases(queryHandler handler.QueryHandlerInterface) error {
 	}
 
 	return nil
+}
+
+// createQueryHandler 智能创建查询处理器
+// 根据配置模式和数据库表数量自动选择最优处理器
+func createQueryHandler(db *gorm.DB, cfg *config.Config) (handler.QueryHandlerInterface, error) {
+	// 获取数据库表数量
+	tables, err := getTableCount(db)
+	if err != nil {
+		return nil, fmt.Errorf("获取表数量失败: %w", err)
+	}
+
+	fmt.Printf("📊 数据库表数量: %d\n", tables)
+
+	// 根据配置模式选择处理器
+	mode := cfg.Query.Mode
+	threshold := cfg.Query.TableCountThreshold
+
+	var queryHandler handler.QueryHandlerInterface
+	var handlerType string
+
+	switch mode {
+	case "simple":
+		// 强制使用单步法
+		queryHandler = handler.NewQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model)
+		handlerType = "单步法（QueryHandler）"
+
+	case "two_phase":
+		// 强制使用两步法
+		queryHandler = handler.NewTwoPhaseQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model)
+		handlerType = "两步法（TwoPhaseQueryHandler）"
+
+	case "auto":
+		// 自动模式：根据表数量智能选择
+		if tables <= threshold {
+			// 小型数据库：使用单步法（速度快）
+			queryHandler = handler.NewQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model)
+			handlerType = "单步法（QueryHandler）"
+			fmt.Printf("✅ 检测到小型数据库（%d ≤ %d），使用单步法以提高性能\n", tables, threshold)
+		} else {
+			// 大型数据库：使用两步法（精准度高）
+			queryHandler = handler.NewTwoPhaseQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model)
+			handlerType = "两步法（TwoPhaseQueryHandler）"
+			fmt.Printf("✅ 检测到大型数据库（%d > %d），使用两步法以保证精准度\n", tables, threshold)
+		}
+
+	default:
+		return nil, fmt.Errorf("未知的查询模式: %s（支持: auto, simple, two_phase）", mode)
+	}
+
+	fmt.Printf("🤖 查询处理器: %s\n", handlerType)
+	fmt.Printf("🤖 LLM模型: %s\n", cfg.LLM.Model)
+
+	return queryHandler, nil
+}
+
+// getTableCount 获取数据库表数量
+func getTableCount(db *gorm.DB) (int, error) {
+	// 使用GORM获取表数量
+	var count int64
+	if err := db.Raw("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()").Scan(&count).Error; err != nil {
+		return 0, fmt.Errorf("查询表数量失败: %w", err)
+	}
+
+	return int(count), nil
 }
