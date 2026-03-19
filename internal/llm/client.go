@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -47,10 +48,11 @@ func NewGLMClient(apiKey, baseURL, model string) *GLMClient {
 
 // GLMRequest GLM API请求结构
 type GLMRequest struct {
-	Model    string          `json:"model"`
-	Messages []GLMMessage    `json:"messages"`
-	Temperature float64       `json:"temperature,omitempty"`
+	Model       string       `json:"model"`
+	Messages    []GLMMessage `json:"messages"`
+	Temperature float64      `json:"temperature,omitempty"`
 	MaxTokens   int          `json:"max_tokens,omitempty"`
+	Stream      bool         `json:"stream,omitempty"` // 是否启用流式响应
 }
 
 // GLMMessage GLM消息结构
@@ -85,6 +87,15 @@ type RateLimitError struct {
 
 func (e *RateLimitError) Error() string {
 	return fmt.Sprintf("API限流错误: %s (建议等待: %v)", e.Message, e.RetryAfter)
+}
+
+// EmptyResponseError 空响应错误
+type EmptyResponseError struct {
+	Message string
+}
+
+func (e *EmptyResponseError) Error() string {
+	return fmt.Sprintf("API返回空响应: %s", e.Message)
 }
 
 // GenerateSQL 生成SQL查询
@@ -143,6 +154,13 @@ func (c *GLMClient) GenerateSQL(ctx context.Context, schema, question string) (s
 	content := response.Choices[0].Message.Content
 	utils.Info("🤖 [LLM] API返回内容: %s", content)
 	utils.Debug("🤖 [LLM] 内容长度: %d字符", len(content))
+
+	// 检查空响应（GLM API有时候会返回200但content为空）
+	if strings.TrimSpace(content) == "" {
+		utils.Error("❌ [LLM] GLM API返回空内容（200状态码但content为空）")
+		utils.Error("❌ [LLM] 这可能是API限流或临时问题，建议重试")
+		return "", &EmptyResponseError{Message: "GLM API返回空内容"}
+	}
 
 	// 解析SQL
 	sql, err := ParseSQLFromResponse(content)
@@ -527,4 +545,223 @@ func (m *MockGLMClient) GenerateSQL(ctx context.Context, schema, question string
 // IsAvailable 检查Mock客户端是否可用
 func (m *MockGLMClient) IsAvailable() bool {
 	return true
+}
+
+// ==================== 流式生成支持 ====================
+
+// StreamChunk 流式响应数据块
+type StreamChunk struct {
+	Delta      string `json:"delta"`       // 增量文本
+	Finished   bool   `json:"finished"`    // 是否完成
+	Error      string `json:"error"`       // 错误信息
+}
+
+// GenerateSQLStream 流式生成SQL查询
+func (c *GLMClient) GenerateSQLStream(ctx context.Context, schema, question string, callback func(StreamChunk)) error {
+	utils.Info("🤖 [LLM] 开始流式生成SQL...")
+
+	// 构建基础Prompt
+	systemPrompt := GenerateSystemPrompt()
+	userPrompt, err := BuildSQLGenerationPrompt(schema, question)
+	if err != nil {
+		return fmt.Errorf("构建Prompt失败: %w", err)
+	}
+
+	// 如果有知识库文档，注入知识库内容
+	if len(c.knowledgeDocs) > 0 {
+		userPrompt = c.knowledgeInjector.Inject(userPrompt, c.knowledgeDocs)
+	}
+
+	// 构建请求（启用流式响应）
+	request := GLMRequest{
+		Model: c.model,
+		Messages: []GLMMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userPrompt},
+		},
+		Temperature: 0.1,
+		MaxTokens:   1000,
+		Stream:      true, // 启用流式响应
+	}
+
+	// 发送流式请求
+	chunkChan, errChan := c.callAPIStream(ctx, request)
+
+	// 处理流式响应
+	var fullContent string
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case chunk, ok := <-chunkChan:
+			if !ok {
+				// 流结束
+				utils.Info("✅ [LLM] 流式生成完成")
+
+				// 解析完整的SQL
+				sql, err := ParseSQLFromResponse(fullContent)
+				if err != nil {
+					callback(StreamChunk{Error: fmt.Sprintf("解析SQL失败: %v", err), Finished: true})
+					return fmt.Errorf("解析SQL失败: %w", err)
+				}
+
+				// 验证SQL
+				if !ValidateSQLQuery(sql) {
+					callback(StreamChunk{Error: "生成的SQL不安全或无效", Finished: true})
+					return errors.New("生成的SQL不安全或无效")
+				}
+
+				// 发送完成事件（包含最终SQL）
+				callback(StreamChunk{Delta: sql, Finished: true})
+				return nil
+			}
+
+			// 累积内容
+			fullContent += chunk.Delta
+			utils.Debug("📝 [LLM] 收到chunk: %s", chunk.Delta)
+
+			// 发送进度回调
+			callback(chunk)
+
+		case err, ok := <-errChan:
+			if !ok {
+				continue // channel已关闭，继续等待chunk
+			}
+			utils.Error("❌ [LLM] 流式API错误: %v", err)
+			callback(StreamChunk{Error: err.Error(), Finished: true})
+			return err
+		}
+	}
+}
+
+// callAPIStream 调用GLM流式API
+func (c *GLMClient) callAPIStream(ctx context.Context, request GLMRequest) (<-chan StreamChunk, <-chan error) {
+	chunkChan := make(chan StreamChunk, 10)
+	errChan := make(chan error, 1)
+
+	go func() {
+		defer close(chunkChan)
+		defer close(errChan)
+
+		// 序列化请求
+		reqBody, err := json.Marshal(request)
+		if err != nil {
+			errChan <- fmt.Errorf("序列化请求失败: %w", err)
+			return
+		}
+
+		// 构建HTTP请求
+		endpoint := fmt.Sprintf("%s/chat/completions", c.baseURL)
+
+		req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(string(reqBody)))
+		if err != nil {
+			errChan <- fmt.Errorf("创建HTTP请求失败: %w", err)
+			return
+		}
+
+		// 设置请求头
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
+		req.Header.Set("Accept", "text/event-stream")
+
+		utils.Info("🔍 [LLM API] 开始流式调用...")
+
+		// 发送请求
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			errChan <- fmt.Errorf("发送HTTP请求失败: %w", err)
+			return
+		}
+		defer resp.Body.Close()
+
+		// 检查响应状态
+		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			errChan <- fmt.Errorf("API返回错误状态码: %d, 响应: %s", resp.StatusCode, string(bodyBytes))
+			return
+		}
+
+		// 读取流式响应
+		scanner := newSSELineScanner(resp.Body)
+		for scanner.Scan() {
+			line := scanner.Text()
+
+			// SSE格式: "data: {...}"
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+
+			data := strings.TrimPrefix(line, "data: ")
+
+			// "[DONE]" 表示流结束
+			if data == "[DONE]" {
+				break
+			}
+
+			// 解析chunk数据
+			var streamResp struct {
+				Choices []struct {
+					Delta struct {
+						Content string `json:"content"`
+					} `json:"delta"`
+				} `json:"choices"`
+			}
+
+			if err := json.Unmarshal([]byte(data), &streamResp); err != nil {
+				utils.Warn("⚠️ [LLM API] 解析chunk失败: %v, data: %s", err, data)
+				continue
+			}
+
+			// 提取增量内容
+			if len(streamResp.Choices) > 0 {
+				delta := streamResp.Choices[0].Delta.Content
+				if delta != "" {
+					chunkChan <- StreamChunk{Delta: delta}
+				}
+			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			errChan <- fmt.Errorf("读取流式响应失败: %w", err)
+		}
+	}()
+
+	return chunkChan, errChan
+}
+
+// ==================== SSE行扫描器 ====================
+
+// sseLineScanner SSE行扫描器
+type sseLineScanner struct {
+	reader *bufio.Reader
+	line   string
+	err    error
+}
+
+// newSSELineScanner 创建SSE行扫描器
+func newSSELineScanner(r io.Reader) *sseLineScanner {
+	return &sseLineScanner{
+		reader: bufio.NewReader(r),
+	}
+}
+
+// Scan 读取下一行
+func (s *sseLineScanner) Scan() bool {
+	line, err := s.reader.ReadString('\n')
+	if err != nil {
+		s.err = err
+		return false
+	}
+	s.line = strings.TrimSuffix(line, "\n")
+	return true
+}
+
+// Text 返回当前行内容
+func (s *sseLineScanner) Text() string {
+	return s.line
+}
+
+// Err 返回错误
+func (s *sseLineScanner) Err() error {
+	return s.err
 }

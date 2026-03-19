@@ -109,6 +109,25 @@ func (h *QueryPageHandler) generateQueryPageHTML() string {
         }
         .btn-clear:hover { background: #bdc3c7; }
 
+        /* 流式开关样式 */
+        .stream-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            color: #7f8c8d;
+            margin-bottom: 10px;
+        }
+        .stream-toggle input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+        .stream-toggle label {
+            cursor: pointer;
+            user-select: none;
+        }
+
         /* 状态消息样式 */
         .loading {
             display: none;
@@ -118,6 +137,31 @@ func (h *QueryPageHandler) generateQueryPageHTML() string {
             font-size: 16px;
         }
         .loading.show { display: block; }
+
+        /* 进度条样式 */
+        .progress-bar-container {
+            width: 100%;
+            background-color: #ecf0f1;
+            border-radius: 10px;
+            margin: 15px 0;
+            overflow: hidden;
+        }
+        .progress-bar {
+            height: 20px;
+            background: linear-gradient(90deg, #3498db 0%, #2980b9 100%);
+            border-radius: 10px;
+            transition: width 0.3s ease;
+            width: 0%;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding-right: 8px;
+        }
+        .progress-bar-text {
+            color: white;
+            font-size: 11px;
+            font-weight: bold;
+        }
         .error {
             display: none;
             text-align: center;
@@ -390,6 +434,12 @@ func (h *QueryPageHandler) generateQueryPageHTML() string {
                     ></textarea>
                 </div>
 
+                <!-- 流式开关 -->
+                <div class="stream-toggle">
+                    <input type="checkbox" id="useStream" checked>
+                    <label for="useStream">🚀 启用流式显示（实时看到AI思考过程）</label>
+                </div>
+
                 <!-- 示例问题（动态加载） -->
                 <div class="examples">
                     <div class="examples-label">💡 试试这些问题：</div>
@@ -413,6 +463,21 @@ func (h *QueryPageHandler) generateQueryPageHTML() string {
         <div class="loading" id="loading">
             <div style="font-size: 48px; margin-bottom: 10px;">⏳</div>
             <div>AI正在思考中，请稍候...</div>
+        </div>
+
+        <!-- 流式思考过程 -->
+        <div class="loading" id="streamProgress" style="display: none;">
+            <div style="font-size: 48px; margin-bottom: 10px;">🤖</div>
+            <div id="streamStatus">正在初始化...</div>
+
+            <!-- 进度条 -->
+            <div class="progress-bar-container" style="max-width: 300px; margin: 15px auto;">
+                <div class="progress-bar" id="streamProgressBar">
+                    <span class="progress-bar-text" id="streamProgressText">0%</span>
+                </div>
+            </div>
+
+            <pre id="streamSQL" style="margin-top: 15px; font-family: 'Monaco', 'Menlo', monospace; font-size: 14px; color: #2c3e50; white-space: pre-wrap; word-wrap: break-word; text-align: left;"></pre>
         </div>
 
         <!-- 错误提示 -->
@@ -785,6 +850,19 @@ func (h *QueryPageHandler) generateQueryPageHTML() string {
                 return;
             }
 
+            const useStream = document.getElementById('useStream').checked;
+
+            if (useStream) {
+                // 使用流式查询
+                streamQuery(question);
+            } else {
+                // 使用普通查询
+                normalQuery(question);
+            }
+        });
+
+        // 普通查询
+        async function normalQuery(question) {
             showLoading();
 
             try {
@@ -807,7 +885,100 @@ func (h *QueryPageHandler) generateQueryPageHTML() string {
             } finally {
                 hideLoading();
             }
-        });
+        }
+
+        // 流式查询
+        function streamQuery(question) {
+            // 显示流式进度
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('streamProgress').style.display = 'block';
+            document.getElementById('streamStatus').textContent = '正在连接...';
+            document.getElementById('streamProgressBar').style.width = '0%';
+            document.getElementById('streamProgressText').textContent = '0%';
+            document.getElementById('streamSQL').textContent = '';
+            document.getElementById('streamSQL').style.display = 'none'; // 初始隐藏SQL区域
+
+            // 构建SSE URL
+            const sseUrl = '/api/v1/stream-query?question=' + encodeURIComponent(question);
+
+            // 创建EventSource
+            const eventSource = new EventSource(sseUrl);
+
+            let sqlBuffer = '';
+
+            // 监听开始事件
+            eventSource.addEventListener('start', (e) => {
+                const data = JSON.parse(e.data);
+                console.log('流式查询开始:', data);
+            });
+
+            // 监听思考事件
+            eventSource.addEventListener('thinking', (e) => {
+                const data = JSON.parse(e.data);
+                document.getElementById('streamStatus').textContent = '🤖 ' + data.message;
+                if (data.progress) {
+                    const progress = data.progress;
+                    document.getElementById('streamProgressBar').style.width = progress + '%';
+                    document.getElementById('streamProgressText').textContent = progress + '%';
+                }
+                // 根据阶段显示/隐藏SQL区域
+                if (data.phase === 'sql_generation') {
+                    document.getElementById('streamSQL').style.display = 'block';
+                } else if (data.phase === 'table_selection') {
+                    document.getElementById('streamSQL').style.display = 'none';
+                }
+            });
+
+            // 监听进度事件
+            eventSource.addEventListener('progress', (e) => {
+                const data = JSON.parse(e.data);
+                if (data.delta) {
+                    sqlBuffer += data.delta;
+                    document.getElementById('streamSQL').textContent = sqlBuffer;
+                    document.getElementById('streamSQL').style.display = 'block';
+                }
+                if (data.progress) {
+                    const progress = data.progress;
+                    document.getElementById('streamProgressBar').style.width = progress + '%';
+                    document.getElementById('streamProgressText').textContent = progress + '%';
+                }
+                // 根据阶段显示/隐藏SQL区域
+                if (data.phase === 'sql_generation') {
+                    document.getElementById('streamSQL').style.display = 'block';
+                } else if (data.phase === 'table_selection') {
+                    document.getElementById('streamSQL').style.display = 'none';
+                }
+            });
+
+            // 监听结果事件
+            eventSource.addEventListener('result', (e) => {
+                const data = JSON.parse(e.data);
+                console.log('流式查询完成:', data);
+
+                // 关闭SSE连接
+                eventSource.close();
+
+                // 隐藏流式进度
+                document.getElementById('streamProgress').style.display = 'none';
+
+                // 显示最终结果
+                showResult(data);
+            });
+
+            // 监听错误事件
+            eventSource.addEventListener('error', (e) => {
+                console.error('流式查询错误:', e);
+                eventSource.close();
+
+                // 隐藏流式进度
+                document.getElementById('streamProgress').style.display = 'none';
+
+                showError('查询失败，请重试');
+            });
+
+            // 保存eventSource引用（用于后续可能的取消操作）
+            window.currentEventSource = eventSource;
+        }
 
         // 支持Ctrl+Enter提交
         document.getElementById('question').addEventListener('keydown', (e) => {

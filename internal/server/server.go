@@ -21,6 +21,7 @@ type Server struct {
 	feedbackHandler     *FeedbackHandler
 	queryPageHandler    *QueryPageHandler
 	suggestionsHandler  *SuggestionsHandler
+	sseHandler          *SSEHandler
 	config              *config.Config
 	httpLogger          *utils.HTTPRequestLogger
 }
@@ -49,6 +50,9 @@ func NewServer(cfg *config.Config, dbHandler QueryHandlerInterface) (*Server, er
 	// 创建示例问题处理器
 	suggestionsHandler := NewSuggestionsHandler(dbHandler)
 
+	// 创建SSE处理器（使用底层的QueryHandlerInterface）
+	sseHandler := NewSSEHandler(dbHandler, feedbackStorage)
+
 	// 配置路由
 	server := &Server{
 		router:             router,
@@ -57,6 +61,7 @@ func NewServer(cfg *config.Config, dbHandler QueryHandlerInterface) (*Server, er
 		feedbackHandler:    feedbackHandler,
 		queryPageHandler:   queryPageHandler,
 		suggestionsHandler: suggestionsHandler,
+		sseHandler:         sseHandler,
 		config:             cfg,
 		httpLogger:         utils.NewHTTPRequestLogger(),
 	}
@@ -103,6 +108,9 @@ func (s *Server) setupRoutes(router *mux.Router) {
 
 	// 示例问题
 	api.HandleFunc("/suggestions", s.suggestionsHandler.HandleSuggestions).Methods("GET", "OPTIONS")
+
+	// 流式查询
+	api.HandleFunc("/stream-query", s.sseHandler.HandleStreamQuery).Methods("GET")
 
 	// 查询页面路由
 	router.HandleFunc("/query", s.queryPageHandler.HandleQueryPage).Methods("GET")
@@ -192,6 +200,7 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 }
 
 // responseRecorder 响应记录器
+// 实现http.ResponseWriter和http.Flusher接口
 type responseRecorder struct {
 	http.ResponseWriter
 	statusCode int
@@ -201,4 +210,19 @@ type responseRecorder struct {
 func (r *responseRecorder) WriteHeader(statusCode int) {
 	r.statusCode = statusCode
 	r.ResponseWriter.WriteHeader(statusCode)
+}
+
+// Flush 实现http.Flusher接口（如果底层ResponseWriter支持的话）
+func (r *responseRecorder) Flush() {
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+// Hijack 实现http.Hijacker接口（用于WebSocket等场景）
+func (r *responseRecorder) Hijack() (c interface{}, rw interface{}, err error) {
+	if hijacker, ok := r.ResponseWriter.(http.Hijacker); ok {
+		return hijacker.Hijack()
+	}
+	return nil, nil, fmt.Errorf("ResponseWriter does not implement http.Hijacker")
 }

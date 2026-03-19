@@ -37,7 +37,7 @@ func main() {
 	// 创建示例仓库
 	exampleRepo := llm.NewExampleRepository("./data")
 
-	fmt.Println("=== NLQ两步法增强测试 ===\n")
+	fmt.Println("=== NLQ两步法增强测试 ===")
 
 	// 测试1：Few-shot示例检索
 	fmt.Println("测试1：Few-shot示例检索")
