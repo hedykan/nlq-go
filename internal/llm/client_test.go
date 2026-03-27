@@ -9,13 +9,15 @@ import (
 
 // TestGLMClient_NewGLMClient 测试创建GLM客户端
 func TestGLMClient_NewGLMClient(t *testing.T) {
-	client := NewGLMClient("test-api-key", "https://api.example.com", "glm-4-plus")
+	client, err := NewGLMClient("test-api-key", "https://api.example.com", "glm-4-plus")
+	if err != nil {
+		t.Fatalf("创建客户端失败: %v", err)
+	}
 	if client == nil {
 		t.Fatal("期望返回非nil的客户端")
 	}
-
-	if client.apiKey != "test-api-key" {
-		t.Errorf("期望apiKey为test-api-key，实际为%s", client.apiKey)
+	if !client.IsAvailable() {
+		t.Error("期望客户端可用")
 	}
 }
 

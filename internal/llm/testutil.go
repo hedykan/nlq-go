@@ -45,21 +45,30 @@ func LoadTestConfig(t *testing.T) *config.Config {
 // 用于需要真实API调用的测试
 func CreateTestClient(t *testing.T) *GLMClient {
 	cfg := LoadTestConfig(t)
-	return NewGLMClient(
+	client, err := NewGLMClient(
 		cfg.LLM.APIKey,
 		cfg.LLM.BaseURL,
 		cfg.LLM.Model,
 	)
+	if err != nil {
+		t.Skipf("创建测试客户端失败: %v", err)
+		return nil
+	}
+	return client
 }
 
 // CreateMockTestClient 创建Mock测试客户端
 // 用于不需要真实API调用的单元测试
 func CreateMockTestClient() *GLMClient {
-	return NewGLMClient(
+	client, err := NewGLMClient(
 		"test-api-key",
 		"https://api.example.com",
 		"glm-4-plus",
 	)
+	if err != nil {
+		return nil
+	}
+	return client
 }
 
 // getEnvWithDefault 获取环境变量，支持默认值

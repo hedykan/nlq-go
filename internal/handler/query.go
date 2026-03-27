@@ -59,7 +59,12 @@ func NewQueryHandlerWithLLM(db *gorm.DB, apiKey, baseURL, model string) *QueryHa
 	}
 
 	// 创建真实的GLM客户端
-	handler.llmClient = llm.NewGLMClient(apiKey, baseURL, model)
+	client, err := llm.NewGLMClient(apiKey, baseURL, model)
+	if err != nil {
+		handler.useRealLLM = false
+		return handler
+	}
+	handler.llmClient = client
 	handler.useRealLLM = true
 
 	return handler
@@ -80,7 +85,13 @@ func NewTwoPhaseQueryHandlerWithLLM(db *gorm.DB, apiKey, baseURL, model string) 
 	}
 
 	// 创建真实的GLM客户端
-	llmClient := llm.NewGLMClient(apiKey, baseURL, model)
+	llmClient, err := llm.NewGLMClient(apiKey, baseURL, model)
+	if err != nil {
+		return &TwoPhaseQueryHandler{
+			db:        parser,
+			llmClient: nil,
+		}
+	}
 
 	// 创建两阶段处理器
 	return NewTwoPhaseQueryHandler(parser, db, llmClient)

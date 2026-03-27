@@ -48,7 +48,11 @@ func main() {
 
 	// 创建LLM客户端
 	fmt.Println("🔧 创建GLM客户端...")
-	client := llm.NewGLMClient(cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model)
+	client, err := llm.NewGLMClient(cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model)
+	if err != nil {
+		fmt.Printf("❌ GLM客户端创建失败: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Println("✅ GLM客户端创建成功")
 	fmt.Println()
 
