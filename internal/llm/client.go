@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -17,14 +18,14 @@ import (
 
 // GLMClient GLM4.7客户端
 type GLMClient struct {
-	apiKey        string
-	baseURL       string
-	model         string
-	timeout       time.Duration
-	maxRetries    int
-	httpClient    *http.Client
-	knowledgeDocs []knowledge.Document // 知识库文档
-	knowledgeInjector *knowledge.Injector // 知识库注入器
+	apiKey            string
+	baseURL           string
+	model             string
+	timeout           time.Duration
+	maxRetries        int
+	httpClient        *http.Client
+	knowledgeDocs     []knowledge.Document // 知识库文档
+	knowledgeInjector *knowledge.Injector  // 知识库注入器
 }
 
 // NewGLMClient 创建GLM客户端
@@ -34,13 +35,27 @@ func NewGLMClient(apiKey, baseURL, model string) *GLMClient {
 		model = "glm-4-plus"
 	}
 
+	// 配置高性能 HTTP Transport
+	transport := &http.Transport{
+		MaxIdleConns:        100,                                                  // 最大空闲连接数
+		MaxIdleConnsPerHost: 10,                                                   // 每个主机最大空闲连接数
+		IdleConnTimeout:     90 * time.Second,                                     // 空闲连接超时（与LLM超时匹配）
+		DialContext:         (&net.Dialer{Timeout: 10 * time.Second}).DialContext, // DNS解析超时
+		TLSHandshakeTimeout: 10 * time.Second,                                     // TLS握手超时
+	}
+
+	httpClient := &http.Client{
+		Timeout:   90 * time.Second,
+		Transport: transport,
+	}
+
 	return &GLMClient{
 		apiKey:            apiKey,
 		baseURL:           baseURL,
 		model:             model,
 		timeout:           90 * time.Second, // 增加到90秒（GLM-4.7响应较慢）
 		maxRetries:        3,
-		httpClient:        &http.Client{Timeout: 90 * time.Second},
+		httpClient:        httpClient,
 		knowledgeDocs:     []knowledge.Document{},
 		knowledgeInjector: knowledge.NewInjector(),
 	}
@@ -275,7 +290,6 @@ func (c *GLMClient) GenerateContent(ctx context.Context, systemPrompt, userPromp
 	return "", fmt.Errorf("重试%d次后仍然失败: %w", c.maxRetries, lastErr)
 }
 
-
 // CorrectSQL 修正错误的SQL
 func (c *GLMClient) CorrectSQL(ctx context.Context, sql, errorMsg, schema string) (string, error) {
 	// 构建修正Prompt
@@ -337,8 +351,14 @@ func (c *GLMClient) callAPI(ctx context.Context, request GLMRequest) (*GLMRespon
 		return nil, fmt.Errorf("序列化请求失败: %w", err)
 	}
 
-	// 构建HTTP请求
-	endpoint := fmt.Sprintf("%s/chat/completions", c.baseURL)
+	// 构建HTTP请求（智能处理baseURL是否已包含chat/completions路径）
+	baseURL := strings.TrimRight(c.baseURL, "/")
+	var endpoint string
+	if strings.HasSuffix(baseURL, "/chat/completions") {
+		endpoint = baseURL
+	} else {
+		endpoint = baseURL + "/chat/completions"
+	}
 
 	// 记录API调用详情
 	utils.Debug("🔍 [LLM API] 调用API: %s", endpoint)
@@ -551,9 +571,9 @@ func (m *MockGLMClient) IsAvailable() bool {
 
 // StreamChunk 流式响应数据块
 type StreamChunk struct {
-	Delta      string `json:"delta"`       // 增量文本
-	Finished   bool   `json:"finished"`    // 是否完成
-	Error      string `json:"error"`       // 错误信息
+	Delta    string `json:"delta"`    // 增量文本
+	Finished bool   `json:"finished"` // 是否完成
+	Error    string `json:"error"`    // 错误信息
 }
 
 // GenerateSQLStream 流式生成SQL查询
@@ -650,8 +670,14 @@ func (c *GLMClient) callAPIStream(ctx context.Context, request GLMRequest) (<-ch
 			return
 		}
 
-		// 构建HTTP请求
-		endpoint := fmt.Sprintf("%s/chat/completions", c.baseURL)
+		// 构建HTTP请求（智能处理baseURL是否已包含chat/completions路径）
+		baseURL := strings.TrimRight(c.baseURL, "/")
+		var endpoint string
+		if strings.HasSuffix(baseURL, "/chat/completions") {
+			endpoint = baseURL
+		} else {
+			endpoint = baseURL + "/chat/completions"
+		}
 
 		req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(string(reqBody)))
 		if err != nil {

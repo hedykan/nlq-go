@@ -2,6 +2,7 @@ package database
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/channelwill/nlq/internal/config"
@@ -10,11 +11,60 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+// 全局SSH隧道实例
+var (
+	sshTunnel *SSHTunnel
+	sshOnce   sync.Once
+)
+
 // NewConnection 创建数据库连接
 func NewConnection(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 	// 验证配置
 	if cfg == nil {
 		return nil, fmt.Errorf("配置不能为nil")
+	}
+
+	// 验证SSH配置
+	if err := cfg.ValidateSSHConfig(); err != nil {
+		return nil, fmt.Errorf("SSH配置验证失败: %w", err)
+	}
+
+	// 保存原始配置
+	originalHost := cfg.Host
+	originalPort := cfg.Port
+
+	// 如果启用SSH隧道，先建立隧道
+	if cfg.SSHEnabled {
+		tunnel, err := createSSHTunnel(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("创建SSH隧道失败: %w", err)
+		}
+
+		// 使用sync.Once确保只设置一次全局隧道
+		sshOnce.Do(func() {
+			sshTunnel = tunnel
+		})
+
+		// 连接SSH服务器
+		if err := tunnel.Connect(); err != nil {
+			return nil, fmt.Errorf("SSH隧道连接失败: %w", err)
+		}
+
+		// 端口转发
+		tunnelAddr, err := tunnel.ForwardPort(cfg.Host, cfg.Port)
+		if err != nil {
+			tunnel.Close()
+			return nil, fmt.Errorf("SSH端口转发失败: %w", err)
+		}
+
+		// 修改配置以使用本地隧道端口
+		host, port, err := parseAddress(tunnelAddr)
+		if err != nil {
+			tunnel.Close()
+			return nil, fmt.Errorf("解析隧道地址失败: %w", err)
+		}
+		cfg.Host = host
+		cfg.Port = port
 	}
 
 	// 构建DSN
@@ -28,20 +78,31 @@ func NewConnection(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 	// 创建连接
 	db, err := gorm.Open(mysql.Open(dsn), gormConfig)
 	if err != nil {
+		// 如果SSH隧道已创建，连接失败时需要关闭
+		if cfg.SSHEnabled && sshTunnel != nil {
+			sshTunnel.Close()
+		}
 		return nil, fmt.Errorf("连接数据库失败: %w", err)
 	}
 
 	// 获取底层SQL DB
 	sqlDB, err := db.DB()
 	if err != nil {
+		if cfg.SSHEnabled && sshTunnel != nil {
+			sshTunnel.Close()
+		}
 		return nil, fmt.Errorf("获取SQL数据库实例失败: %w", err)
 	}
 
 	// 设置连接池参数
-	sqlDB.SetMaxIdleConns(10)                    // 最大空闲连接数
-	sqlDB.SetMaxOpenConns(100)                   // 最大打开连接数
-	sqlDB.SetConnMaxLifetime(time.Hour)          // 连接最大生命周期
-	sqlDB.SetConnMaxIdleTime(time.Minute * 10)   // 最大空闲时间
+	sqlDB.SetMaxIdleConns(10)                  // 最大空闲连接数
+	sqlDB.SetMaxOpenConns(100)                 // 最大打开连接数
+	sqlDB.SetConnMaxLifetime(time.Hour)        // 连接最大生命周期
+	sqlDB.SetConnMaxIdleTime(time.Minute * 10) // 最大空闲时间
+
+	// 恢复原始配置
+	cfg.Host = originalHost
+	cfg.Port = originalPort
 
 	return db, nil
 }
@@ -90,4 +151,44 @@ func ValidateConnection(db *gorm.DB) error {
 	}
 
 	return nil
+}
+
+// createSSHTunnel 创建SSH隧道
+func createSSHTunnel(cfg *config.DatabaseConfig) (*SSHTunnel, error) {
+	sshConfig := &SSHConfig{
+		Host:           cfg.SSHHost,
+		Port:           cfg.SSHPort,
+		User:           cfg.SSHUser,
+		Password:       cfg.SSHPassword,
+		PrivateKeyFile: cfg.SSHPrivateKeyFile,
+		KeyPassphrase:  cfg.SSHKeyPassphrase,
+	}
+
+	return NewSSHTunnel(sshConfig)
+}
+
+// CloseConnection 关闭数据库连接和SSH隧道
+func CloseConnection(db *gorm.DB) error {
+	// 关闭数据库连接
+	if db != nil {
+		sqlDB, err := db.DB()
+		if err == nil {
+			_ = sqlDB.Close()
+		}
+	}
+
+	// 关闭SSH隧道
+	if sshTunnel != nil {
+		err := sshTunnel.Close()
+		sshTunnel = nil
+		sshOnce = sync.Once{} // 重置sync.Once
+		return err
+	}
+
+	return nil
+}
+
+// GetSSHTunnel 获取当前SSH隧道实例（用于测试和监控）
+func GetSSHTunnel() *SSHTunnel {
+	return sshTunnel
 }

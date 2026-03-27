@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -29,6 +30,15 @@ type DatabaseConfig struct {
 	Readonly       bool          `mapstructure:"readonly"`
 	ReadTimeout    time.Duration `mapstructure:"read_timeout"`    // 读取超时
 	ConnectTimeout time.Duration `mapstructure:"connect_timeout"` // 连接超时
+
+	// SSH隧道配置（新增）
+	SSHEnabled        bool   `mapstructure:"ssh_enabled"`          // 是否启用SSH隧道
+	SSHHost           string `mapstructure:"ssh_host"`             // SSH服务器地址
+	SSHPort           int    `mapstructure:"ssh_port"`             // SSH服务器端口（默认22）
+	SSHUser           string `mapstructure:"ssh_user"`             // SSH用户名
+	SSHPassword       string `mapstructure:"ssh_password"`         // SSH密码（与私钥二选一）
+	SSHPrivateKeyFile string `mapstructure:"ssh_private_key_file"` // SSH私钥文件路径
+	SSHKeyPassphrase  string `mapstructure:"ssh_key_passphrase"`   // 私钥密码短语
 }
 
 // LLMConfig 大语言模型配置
@@ -294,4 +304,63 @@ func (c *Config) GetDSN() string {
 		c.Database.Port,
 		c.Database.Database,
 	)
+}
+
+// ValidateSSHConfig 验证SSH配置的有效性
+func (c *DatabaseConfig) ValidateSSHConfig() error {
+	// 如果未启用SSH隧道，直接返回
+	if !c.SSHEnabled {
+		return nil
+	}
+
+	// 验证SSH配置完整性
+	if c.SSHHost == "" {
+		return fmt.Errorf("SSH隧道已启用，但SSH主机地址未配置")
+	}
+
+	if c.SSHPort <= 0 || c.SSHPort > 65535 {
+		return fmt.Errorf("SSH端口必须在1-65535之间")
+	}
+
+	if c.SSHUser == "" {
+		return fmt.Errorf("SSH隧道已启用，但SSH用户名未配置")
+	}
+
+	// 验证认证方式
+	if c.SSHPassword == "" && c.SSHPrivateKeyFile == "" {
+		return fmt.Errorf("SSH隧道已启用，必须配置SSH密码或私钥文件")
+	}
+
+	// 如果使用私钥认证，验证私钥文件
+	if c.SSHPrivateKeyFile != "" {
+		if err := c.validatePrivateKeyFile(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validatePrivateKeyFile 验证私钥文件的有效性
+func (c *DatabaseConfig) validatePrivateKeyFile() error {
+	// 检查文件是否存在
+	if _, err := os.Stat(c.SSHPrivateKeyFile); os.IsNotExist(err) {
+		return fmt.Errorf("SSH私钥文件不存在: %s", c.SSHPrivateKeyFile)
+	}
+
+	// 检查文件权限（私钥文件应该只有所有者可读）
+	info, err := os.Stat(c.SSHPrivateKeyFile)
+	if err != nil {
+		return fmt.Errorf("无法读取SSH私钥文件: %w", err)
+	}
+
+	// 在Unix系统上检查文件权限
+	// 私钥文件应该权限为600（只有所有者可读写）
+	if info.Mode().Perm()&0077 != 0 {
+		// 警告：私钥文件权限过于宽松
+		// 这里返回警告而不是错误，允许用户继续
+		fmt.Printf("⚠️  警告: SSH私钥文件权限过于宽松，建议设置为600: %s\n", c.SSHPrivateKeyFile)
+	}
+
+	return nil
 }

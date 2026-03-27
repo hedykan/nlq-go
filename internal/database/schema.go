@@ -62,27 +62,61 @@ func NewSchemaParser(db *gorm.DB) *SchemaParser {
 	return &SchemaParser{db: db}
 }
 
-// ParseSchema 解析数据库中所有表的结构
+// ParseSchema 解析数据库中所有表的结构（优化版：一次性获取所有数据）
 func (p *SchemaParser) ParseSchema() ([]TableSchema, error) {
-	var tables []TableSchema
-
-	// 获取所有表名
-	var tableNames []string
-	if err := p.db.Table("information_schema.tables").
-		Select("table_name").
-		Where("table_schema = ?", p.db.Migrator().CurrentDatabase()).
-		Pluck("table_name", &tableNames).Error; err != nil {
-		return nil, fmt.Errorf("获取表名失败: %w", err)
+	type ColumnInfo struct {
+		TableName     string
+		ColumnName    string
+		DataType      string
+		IsNullable    string
+		ColumnDefault string
+		ColumnComment string
+		OrdinalPos    int
 	}
 
-	// 解析每个表的结构
-	for _, tableName := range tableNames {
-		table, err := p.ParseTable(tableName)
-		if err != nil {
-			// 跳过无法解析的表
-			continue
+	var columns []ColumnInfo
+	// 一次性获取所有表的所有列信息，只需要1次数据库查询！
+	query := `
+		SELECT
+			table_name,
+			column_name,
+			data_type,
+			is_nullable,
+			column_default,
+			column_comment,
+			ordinal_position
+		FROM information_schema.columns
+		WHERE table_schema = ?
+		ORDER BY table_name, ordinal_position
+	`
+
+	if err := p.db.Raw(query, p.db.Migrator().CurrentDatabase()).Scan(&columns).Error; err != nil {
+		return nil, fmt.Errorf("获取表结构失败: %w", err)
+	}
+
+	// 按表分组
+	tableMap := make(map[string][]ColumnInfo)
+	for _, col := range columns {
+		tableMap[col.TableName] = append(tableMap[col.TableName], col)
+	}
+
+	// 构建结果
+	var tables []TableSchema
+	for tableName, cols := range tableMap {
+		var columnSchemas []ColumnSchema
+		for _, col := range cols {
+			columnSchemas = append(columnSchemas, ColumnSchema{
+				Name:     col.ColumnName,
+				Type:     col.DataType,
+				Nullable: col.IsNullable == "YES",
+				Default:  col.ColumnDefault,
+				Comment:  col.ColumnComment,
+			})
 		}
-		tables = append(tables, table)
+		tables = append(tables, TableSchema{
+			Name:    tableName,
+			Columns: columnSchemas,
+		})
 	}
 
 	return tables, nil
@@ -267,19 +301,19 @@ type ForeignKey struct {
 
 // TableDetail 表详情（用于阶段2的完整Schema）
 type TableDetail struct {
-	Name       string          `json:"name"`
-	Comment    string          `json:"comment"`
-	Columns    []ColumnSchema  `json:"columns"`
+	Name        string         `json:"name"`
+	Comment     string         `json:"comment"`
+	Columns     []ColumnSchema `json:"columns"`
 	ForeignKeys []ForeignKey   `json:"foreign_keys"`
-	PrimaryKey string          `json:"primary_key"`
+	PrimaryKey  string         `json:"primary_key"`
 }
 
 // GetTableSummaries 获取所有表的摘要信息（阶段1使用）
 func (p *SchemaParser) GetTableSummaries() ([]TableSummary, error) {
 	type TableInfo struct {
-		TableName      string
-		TableComment   string
-		TableRows      int64
+		TableName    string
+		TableComment string
+		TableRows    int64
 	}
 
 	var tableInfos []TableInfo
@@ -318,9 +352,9 @@ func (p *SchemaParser) GetTableSummaries() ([]TableSummary, error) {
 // GetTableSummariesEnhanced 获取增强的表摘要信息（包含关键字段）
 func (p *SchemaParser) GetTableSummariesEnhanced() ([]TableSummary, error) {
 	type TableInfo struct {
-		TableName      string
-		TableComment   string
-		TableRows      int64
+		TableName    string
+		TableComment string
+		TableRows    int64
 	}
 
 	var tableInfos []TableInfo
@@ -447,11 +481,11 @@ func (p *SchemaParser) GetTableDetail(tableName string) (TableDetail, error) {
 	`, p.db.Migrator().CurrentDatabase(), tableName).Scan(&tableComment)
 
 	return TableDetail{
-		Name:       tableSchema.Name,
-		Comment:    tableComment,
-		Columns:    tableSchema.Columns,
+		Name:        tableSchema.Name,
+		Comment:     tableComment,
+		Columns:     tableSchema.Columns,
 		ForeignKeys: fks,
-		PrimaryKey: pk,
+		PrimaryKey:  pk,
 	}, nil
 }
 

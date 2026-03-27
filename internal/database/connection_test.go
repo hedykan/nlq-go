@@ -287,3 +287,190 @@ func TestConnection_Close(t *testing.T) {
 		t.Error("期望关闭后Ping失败，但成功了")
 	}
 }
+
+// TestValidateConnection_Valid 测试验证有效连接
+func TestValidateConnection_Valid(t *testing.T) {
+	cfg := &config.DatabaseConfig{
+		Driver:   "mysql",
+		Host:     "localhost",
+		Port:     3306,
+		Database: "loloyal",
+		Username: "root",
+		Password: "root",
+		Readonly: true,
+	}
+
+	db, err := NewConnection(cfg)
+	if err != nil {
+		t.Fatalf("创建数据库连接失败: %v", err)
+	}
+	defer func() {
+		sqlDB, _ := db.DB()
+		sqlDB.Close()
+	}()
+
+	err = ValidateConnection(db)
+	if err != nil {
+		t.Errorf("验证有效连接失败: %v", err)
+	}
+}
+
+// TestValidateConnection_Nil 测试验证nil连接
+func TestValidateConnection_Nil(t *testing.T) {
+	err := ValidateConnection(nil)
+	if err == nil {
+		t.Error("期望验证nil连接返回错误")
+	}
+}
+
+// TestCloseConnection_Valid 测试关闭数据库连接
+func TestCloseConnection_Valid(t *testing.T) {
+	cfg := &config.DatabaseConfig{
+		Driver:   "mysql",
+		Host:     "localhost",
+		Port:     3306,
+		Database: "loloyal",
+		Username: "root",
+		Password: "root",
+		Readonly: true,
+	}
+
+	db, err := NewConnection(cfg)
+	if err != nil {
+		t.Fatalf("创建数据库连接失败: %v", err)
+	}
+
+	err = CloseConnection(db)
+	if err != nil {
+		t.Errorf("关闭连接失败: %v", err)
+	}
+
+	// 验证SSH隧道已重置
+	tunnel := GetSSHTunnel()
+	if tunnel != nil {
+		t.Error("期望关闭后SSH隧道为nil")
+	}
+}
+
+// TestCloseConnection_Nil 测试关闭nil连接
+func TestCloseConnection_Nil(t *testing.T) {
+	err := CloseConnection(nil)
+	if err != nil {
+		t.Errorf("关闭nil连接应该不返回错误: %v", err)
+	}
+}
+
+// TestGetSSHTunnel 测试获取SSH隧道
+func TestGetSSHTunnel(t *testing.T) {
+	// 没有SSH隧道时应该返回nil
+	tunnel := GetSSHTunnel()
+	if tunnel != nil {
+		t.Error("期望没有SSH隧道时返回nil")
+	}
+}
+
+// TestNewConnection_SSHEnabled_ValidationFailure 测试SSH配置验证失败
+func TestNewConnection_SSHEnabled_ValidationFailure(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  *config.DatabaseConfig
+		wantErr bool
+	}{
+		{
+			name: "SSH启用但缺少主机",
+			config: &config.DatabaseConfig{
+				Driver:     "mysql",
+				Host:       "localhost",
+				Port:       3306,
+				Database:   "testdb",
+				Username:   "root",
+				Password:   "root",
+				SSHEnabled: true,
+				SSHHost:    "",
+			},
+			wantErr: true,
+		},
+		{
+			name: "SSH启用但缺少用户",
+			config: &config.DatabaseConfig{
+				Driver:     "mysql",
+				Host:       "localhost",
+				Port:       3306,
+				Database:   "testdb",
+				Username:   "root",
+				Password:   "root",
+				SSHEnabled: true,
+				SSHHost:    "example.com",
+				SSHUser:    "",
+			},
+			wantErr: true,
+		},
+		{
+			name: "SSH启用但缺少认证",
+			config: &config.DatabaseConfig{
+				Driver:           "mysql",
+				Host:             "localhost",
+				Port:             3306,
+				Database:         "testdb",
+				Username:         "root",
+				Password:         "root",
+				SSHEnabled:       true,
+				SSHHost:          "example.com",
+				SSHUser:          "testuser",
+				SSHPassword:      "",
+				SSHPrivateKeyFile: "",
+			},
+			wantErr: true,
+		},
+		{
+			name: "SSH启用但私钥文件不存在",
+			config: &config.DatabaseConfig{
+				Driver:           "mysql",
+				Host:             "localhost",
+				Port:             3306,
+				Database:         "testdb",
+				Username:         "root",
+				Password:         "root",
+				SSHEnabled:       true,
+				SSHHost:          "example.com",
+				SSHUser:          "testuser",
+				SSHPrivateKeyFile: "/nonexistent/key.pem",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewConnection(tt.config)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("NewConnection() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestNewConnection_SSHDisabled_Compatibility 测试不使用SSH时的向后兼容性
+func TestNewConnection_SSHDisabled_Compatibility(t *testing.T) {
+	cfg := &config.DatabaseConfig{
+		Driver:     "mysql",
+		Host:       "localhost",
+		Port:       3306,
+		Database:   "loloyal",
+		Username:   "root",
+		Password:   "root",
+		Readonly:   true,
+		SSHEnabled: false, // 显式禁用
+	}
+
+	db, err := NewConnection(cfg)
+	if err != nil {
+		t.Fatalf("创建数据库连接失败: %v", err)
+	}
+	defer CloseConnection(db)
+
+	// 验证连接可用
+	if err := ValidateConnection(db); err != nil {
+		t.Errorf("验证连接失败: %v", err)
+	}
+}

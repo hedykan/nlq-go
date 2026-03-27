@@ -9,6 +9,7 @@ import (
 	"github.com/channelwill/nlq/internal/knowledge"
 	"github.com/channelwill/nlq/internal/llm"
 	"github.com/channelwill/nlq/internal/sql"
+	"github.com/channelwill/nlq/pkg/utils"
 	"gorm.io/gorm"
 )
 
@@ -93,7 +94,7 @@ type QueryResult struct {
 	Error              string                 `json:"error,omitempty"`
 	Duration           time.Duration          `json:"duration"`
 	Metadata           map[string]interface{} `json:"metadata,omitempty"`
-	FieldClarification *FieldClarification     `json:"field_clarification,omitempty"` // 字段澄清信息
+	FieldClarification *FieldClarification    `json:"field_clarification,omitempty"` // 字段澄清信息
 }
 
 // Handle 处理自然语言查询（简化版本）
@@ -119,7 +120,10 @@ func (h *QueryHandler) Handle(ctx context.Context, question string) (*QueryResul
 	}
 
 	// 2. 解析Schema
+	utils.Info("🔍 [Handler] 开始解析Schema...")
+	schemaStart := time.Now()
 	schema, err := h.parser.FormatForPrompt()
+	utils.Info("🔍 [Handler] Schema解析完成，耗时: %v，长度: %d", time.Since(schemaStart), len(schema))
 	if err != nil {
 		result.Error = fmt.Sprintf("解析Schema失败: %v", err)
 		return result, err
