@@ -120,3 +120,22 @@ WHERE
 u.is_delete = 0
 ```
 **错误信息**: 执行SQL失败: Error 1054 (42S22): Unknown column 'c.shop_id' in 'on clause'
+---
+
+## 示例
+**问题**: 查询每个用户的订单数量
+**错误的SQL**:
+```sql
+SELECT
+c.customer_rid,
+COUNT(o.id) AS order_count
+FROM
+boom_customer c
+LEFT JOIN
+boom_order_paid_water o ON c.customer_rid = o.customer_id
+WHERE
+c.is_delete = 0 AND (o.is_delete = 0 OR o.is_delete IS NULL)
+GROUP BY
+c.customer_rid;
+```
+**错误信息**: 执行SQL失败: invalid connection
