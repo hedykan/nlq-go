@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -32,10 +33,14 @@ func NewGLMClient(apiKey, baseURL, model string) (*GLMClient, error) {
 		baseURL = strings.TrimSuffix(baseURL, "/chat/completions")
 	}
 
+	httpClient := &http.Client{
+		Timeout: 120 * time.Second,
+	}
 	llmInstance, err := openai.New(
 		openai.WithToken(apiKey),
 		openai.WithBaseURL(baseURL),
 		openai.WithModel(model),
+		openai.WithHTTPClient(httpClient),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("创建LLM客户端失败: %w", err)

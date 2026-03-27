@@ -53,3 +53,70 @@ uninstall_count DESC
 LIMIT 10;
 ```
 **错误信息**: 执行SQL失败: Error 1055 (42000): Expression #1 of SELECT list is not in GROUP BY clause and contains nonaggregated column 'loloyal.bu.id' which is not functionally dependent on columns in GROUP BY clause; this is incompatible with sql_mode=only_full_group_by
+---
+
+## 示例
+**问题**: 找出所有下过订单的用户姓名和手机号
+**错误的SQL**:
+```sql
+SELECT DISTINCT CONCAT_WS(' ', first_name, last_name) AS name, phone
+FROM boom_customer
+INNER JOIN boom_order_paid_water ON boom_customer.customer_rid = boom_order_paid_water.customer_id AND boom_customer.shop_id = boom_order_paid_water.shop_id
+WHERE boom_customer.is_delete = 0 AND boom_order_paid_water.is_delete = 0;
+```
+**错误信息**: 执行SQL失败: Error 1054 (42S22): Unknown column 'boom_customer.shop_id' in 'on clause'
+---
+
+## 示例
+**问题**: 查询VIP用户的等级、积分和最近一次订单时间
+**错误的SQL**:
+```sql
+SELECT
+c.vip_tier_id AS level,
+c.points,
+MAX(o.created_at) AS last_order_time
+FROM
+boom_customer c
+LEFT JOIN
+boom_order_paid_water o ON c.customer_rid = o.customer_id AND c.shop_id = o.shop_id
+WHERE
+c.vip_tier_id IS NOT NULL
+AND c.is_delete = 0
+GROUP BY
+c.customer_rid,
+c.shop_id,
+c.vip_tier_id,
+c.points;
+```
+**错误信息**: 执行SQL失败: Error 1054 (42S22): Unknown column 'c.shop_id' in 'on clause'
+---
+
+## 示例
+**问题**: 查询用户及其关联的客户信息
+**错误的SQL**:
+```sql
+SELECT
+u.id,
+u.shop_id,
+u.shop_name,
+u.username,
+u.email,
+u.level,
+u.status,
+c.id AS customer_id,
+c.customer_rid,
+c.first_name,
+c.last_name,
+c.email AS customer_email,
+c.phone,
+c.state,
+c.total_spent,
+c.points
+FROM
+boom_user u
+LEFT JOIN
+boom_customer c ON u.shop_id = c.shop_id AND c.is_delete = 0
+WHERE
+u.is_delete = 0
+```
+**错误信息**: 执行SQL失败: Error 1054 (42S22): Unknown column 'c.shop_id' in 'on clause'
