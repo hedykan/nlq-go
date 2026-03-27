@@ -139,3 +139,18 @@ GROUP BY
 c.customer_rid;
 ```
 **错误信息**: 执行SQL失败: invalid connection
+---
+
+## 示例
+**问题**: 统计VIP用户（C级别）的数量和他们的总积分
+**错误的SQL**:
+```sql
+SELECT
+COUNT(DISTINCT u.id) AS vip_count,
+COALESCE(SUM(c.points), 0) AS total_points
+FROM boom_user u
+LEFT JOIN boom_customer c ON u.shop_id = c.shop_id AND c.is_delete = 0
+WHERE u.level = 'C'
+AND u.is_delete = 0
+```
+**错误信息**: 执行SQL失败: Error 1054 (42S22): Unknown column 'c.shop_id' in 'on clause'
