@@ -11,12 +11,12 @@ import (
 
 // Config 应用配置
 type Config struct {
-	Database     DatabaseConfig     `mapstructure:"database"`
-	LLM          LLMConfig          `mapstructure:"llm"`
-	Security     SecurityConfig     `mapstructure:"security"`
-	Server       ServerConfig       `mapstructure:"server"`
-	FieldAliases FieldAliasConfig   `mapstructure:"field_aliases"` // 字段别名配置
-	Query        QueryConfig        `mapstructure:"query"`         // 查询处理器配置
+	Database     DatabaseConfig   `mapstructure:"database"`
+	LLM          LLMConfig        `mapstructure:"llm"`
+	Security     SecurityConfig   `mapstructure:"security"`
+	Server       ServerConfig     `mapstructure:"server"`
+	FieldAliases FieldAliasConfig `mapstructure:"field_aliases"` // 字段别名配置
+	Query        QueryConfig      `mapstructure:"query"`         // 查询处理器配置
 }
 
 // DatabaseConfig 数据库配置
@@ -51,6 +51,7 @@ type LLMConfig struct {
 	MaxRetries   int           `mapstructure:"max_retries"`
 	Timeout      time.Duration `mapstructure:"timeout"`
 	Temperature  float64       `mapstructure:"temperature"`
+	MaxTokens    int           `mapstructure:"max_tokens"`
 }
 
 // SecurityConfig 安全配置
@@ -64,12 +65,12 @@ type SecurityConfig struct {
 
 // ServerConfig 服务器配置
 type ServerConfig struct {
-	Host          string        `mapstructure:"host"`
-	Port          int           `mapstructure:"port"`
-	QueryTimeout  time.Duration `mapstructure:"query_timeout"`
-	ReadTimeout   time.Duration `mapstructure:"read_timeout"`
-	WriteTimeout  time.Duration `mapstructure:"write_timeout"`
-	EnableCORS    bool          `mapstructure:"enable_cors"`
+	Host         string        `mapstructure:"host"`
+	Port         int           `mapstructure:"port"`
+	QueryTimeout time.Duration `mapstructure:"query_timeout"`
+	ReadTimeout  time.Duration `mapstructure:"read_timeout"`
+	WriteTimeout time.Duration `mapstructure:"write_timeout"`
+	EnableCORS   bool          `mapstructure:"enable_cors"`
 }
 
 // FieldAliasConfig 字段别名配置
@@ -86,8 +87,8 @@ type FieldAliasConfig struct {
 
 // QueryConfig 查询处理器配置
 type QueryConfig struct {
-	Mode            string `mapstructure:"mode"`             // 处理模式: "auto"(自动), "simple"(单步), "two_phase"(两步)
-	TableCountThreshold int  `mapstructure:"table_count_threshold"` // 表数量阈值（自动模式下使用）
+	Mode                string `mapstructure:"mode"`                  // 处理模式: "auto"(自动), "simple"(单步), "two_phase"(两步)
+	TableCountThreshold int    `mapstructure:"table_count_threshold"` // 表数量阈值（自动模式下使用）
 }
 
 // LoadConfig 使用viper加载配置
@@ -159,7 +160,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("database.host", "localhost")
 	v.SetDefault("database.port", 3306)
 	v.SetDefault("database.readonly", true)
-	v.SetDefault("database.read_timeout", 30*time.Second)   // 默认读取超时30秒
+	v.SetDefault("database.read_timeout", 30*time.Second)    // 默认读取超时30秒
 	v.SetDefault("database.connect_timeout", 10*time.Second) // 默认连接超时10秒
 
 	// LLM默认值
@@ -168,7 +169,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("llm.default_model", "glm-4.7")
 	v.SetDefault("llm.max_retries", 3)
 	v.SetDefault("llm.timeout", 90*time.Second) // GLM-4.7响应较慢
-	v.SetDefault("llm.temperature", 0.1)
+	v.SetDefault("llm.temperature", 0.0)
+	v.SetDefault("llm.max_tokens", 2048)
 
 	// 安全默认值
 	v.SetDefault("security.mode", "strict")
@@ -184,8 +186,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.enable_cors", true)
 
 	// 查询处理器默认值
-	v.SetDefault("query.mode", "auto")                      // 默认自动模式
-	v.SetDefault("query.table_count_threshold", 20)         // 默认表数量阈值为20
+	v.SetDefault("query.mode", "auto")              // 默认自动模式
+	v.SetDefault("query.table_count_threshold", 20) // 默认表数量阈值为20
 }
 
 // bindEnvVars 绑定环境变量（向后兼容，支持无前缀的环境变量）
@@ -243,6 +245,12 @@ func (c *Config) SetDefaults() {
 	}
 	if c.LLM.Timeout == 0 {
 		c.LLM.Timeout = 90 * time.Second // GLM-4.7响应较慢
+	}
+	if c.LLM.Temperature == 0 {
+		c.LLM.Temperature = 0.0
+	}
+	if c.LLM.MaxTokens == 0 {
+		c.LLM.MaxTokens = 2048
 	}
 
 	// 安全默认值

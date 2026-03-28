@@ -40,20 +40,24 @@ func main() {
 	fmt.Println()
 
 	// 检查API Key
-	if cfg.LLM.APIKey == "" || cfg.LLM.APIKey == "your-api-key-here" || cfg.LLM.APIKey == "${GLM_API_KEY}" {
+	if cfg.LLM.APIKey == "" {
 		fmt.Println("❌ API Key未配置！")
-		fmt.Println("请设置环境变量 GLM_API_KEY 或在配置文件中设置有效的API Key")
+		fmt.Println("请设置环境变量 LLM_API_KEY 或在配置文件中设置有效的API Key")
 		os.Exit(1)
 	}
 
 	// 创建LLM客户端
-	fmt.Println("🔧 创建GLM客户端...")
-	client, err := llm.NewGLMClient(cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model)
+	fmt.Println("🔧 创建LLM客户端...")
+	opts := &llm.LLMOptions{
+		Temperature: cfg.LLM.Temperature,
+		MaxTokens:   cfg.LLM.MaxTokens,
+	}
+	client, err := llm.NewLLMClient(cfg.LLM.Provider, cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model, opts)
 	if err != nil {
-		fmt.Printf("❌ GLM客户端创建失败: %v\n", err)
+		fmt.Printf("❌ LLM客户端创建失败: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("✅ GLM客户端创建成功")
+	fmt.Println("✅ LLM客户端创建成功")
 	fmt.Println()
 
 	// 测试API连接
@@ -71,7 +75,7 @@ func main() {
 }
 
 // testAPIConnection 测试API连接
-func testAPIConnection(client *llm.GLMClient, apiKey string) {
+func testAPIConnection(client llm.LLMClient, apiKey string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -130,7 +134,7 @@ func testAPIConnection(client *llm.GLMClient, apiKey string) {
 }
 
 // testSQLGeneration 测试SQL生成
-func testSQLGeneration(client *llm.GLMClient) {
+func testSQLGeneration(client llm.LLMClient) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 

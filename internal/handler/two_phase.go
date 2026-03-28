@@ -18,18 +18,18 @@ import (
 // TwoPhaseQueryHandler 两阶段查询处理器（适合动态数据库）
 type TwoPhaseQueryHandler struct {
 	db            *database.SchemaParser
-	dbGORM        *gorm.DB                  // GORM数据库连接（用于执行SQL）
+	dbGORM        *gorm.DB // GORM数据库连接（用于执行SQL）
 	llmClient     LLMClient
 	tableSelector *TableSelector
 	schemaBuilder *SchemaBuilder
-	executor      *sql.Executor             // SQL执行器
+	executor      *sql.Executor // SQL执行器
 }
 
 // TableSelector 表选择器（阶段1）
 type TableSelector struct {
-	llmClient      LLMClient
-	exampleRepo    *llm.ExampleRepository
-	fieldAliasMap  map[string][]string // 字段别名映射
+	llmClient     LLMClient
+	exampleRepo   *llm.ExampleRepository
+	fieldAliasMap map[string][]string // 字段别名映射
 }
 
 // SchemaBuilder Schema构建器（阶段2）
@@ -39,17 +39,17 @@ type SchemaBuilder struct {
 
 // TableSelection 表选择结果
 type TableSelection struct {
-	PrimaryTables      []string             `json:"primary_tables"`       // 主要相关的表
-	SecondaryTables    []string             `json:"secondary_tables"`     // 可能相关的表（保险起见）
-	Reasoning          string               `json:"reasoning"`            // 选择理由（用于调试）
-	FieldClarification *FieldClarification  `json:"field_clarification,omitempty"` // 字段澄清信息
+	PrimaryTables      []string            `json:"primary_tables"`                // 主要相关的表
+	SecondaryTables    []string            `json:"secondary_tables"`              // 可能相关的表（保险起见）
+	Reasoning          string              `json:"reasoning"`                     // 选择理由（用于调试）
+	FieldClarification *FieldClarification `json:"field_clarification,omitempty"` // 字段澄清信息
 }
 
 // FieldClarification 字段澄清信息
 type FieldClarification struct {
-	AmbiguousField     string   `json:"ambiguous_field"`     // 模糊字段名（如 "name"）
-	PossibleFields     []string `json:"possible_fields"`     // 可能的实际字段
-	SuggestedQuestion  string   `json:"suggested_question"`  // 建议的问题示例
+	AmbiguousField    string   `json:"ambiguous_field"`    // 模糊字段名（如 "name"）
+	PossibleFields    []string `json:"possible_fields"`    // 可能的实际字段
+	SuggestedQuestion string   `json:"suggested_question"` // 建议的问题示例
 }
 
 // NewTwoPhaseQueryHandler 创建两阶段查询处理器
@@ -116,7 +116,13 @@ func (h *TwoPhaseQueryHandler) Handle(ctx context.Context, question string) (*Qu
 	}
 
 	utils.Info("   └─ ✅ [阶段5] SQL执行成功 | 返回 %d 行",
-		func() int { if result.Result != nil { return result.Result.Count } else { return 0 } }())
+		func() int {
+			if result.Result != nil {
+				return result.Result.Count
+			} else {
+				return 0
+			}
+		}())
 
 	result.Duration = time.Since(start)
 	return result, nil
@@ -236,13 +242,8 @@ func (h *TwoPhaseQueryHandler) SetKnowledge(docs []knowledge.Document) error {
 		return fmt.Errorf("LLM客户端未初始化")
 	}
 
-	// 尝试将知识库设置到LLM客户端
-	if glmClient, ok := h.llmClient.(*llm.GLMClient); ok {
-		glmClient.SetKnowledge(docs)
-		return nil
-	}
-
-	return fmt.Errorf("LLM客户端不支持知识库功能")
+	h.llmClient.SetKnowledge(docs)
+	return nil
 }
 
 // NewTableSelector 创建表选择器
@@ -306,7 +307,6 @@ func (s *TableSelector) SelectTables(ctx context.Context, question string, parse
 	_ = s.calculateFieldMatchConfidence(question, selection.PrimaryTables, tables)
 	// 字段澄清已禁用
 	selection.FieldClarification = nil
-
 
 	return selection, nil
 }

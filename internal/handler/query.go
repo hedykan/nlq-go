@@ -26,7 +26,12 @@ type QueryHandler struct {
 type LLMClient interface {
 	GenerateSQL(ctx context.Context, schema, question string) (string, error)
 	GenerateContent(ctx context.Context, systemPrompt, userPrompt string) (string, error)
+	SetKnowledge(docs []knowledge.Document)
+	GetKnowledge() []knowledge.Document
+	SetModel(model string)
+	GetModel() string
 	IsAvailable() bool
+	Type() string
 }
 
 // NewQueryHandler 创建查询处理器（用于不需要LLM的场景：直接SQL执行、Schema查看）
@@ -43,23 +48,24 @@ func NewQueryHandler(db *gorm.DB) *QueryHandler {
 }
 
 // NewQueryHandlerWithLLM 创建带LLM的查询处理器（强制要求API Key）
-func NewQueryHandlerWithLLM(db *gorm.DB, apiKey, baseURL, model string) *QueryHandler {
+func NewQueryHandlerWithLLM(db *gorm.DB, apiKey, baseURL, model string, temperature float64, maxTokens int) *QueryHandler {
 	handler := &QueryHandler{
 		db:         db,
 		parser:     database.NewSchemaParser(db),
 		executor:   sql.NewExecutor(db),
-		useRealLLM: false, // 将在下面设置
+		useRealLLM: false,
 	}
 
-	// 强制要求有效的API Key
-	if apiKey == "" || apiKey == "your-api-key-here" || apiKey == "${GLM_API_KEY}" {
-		// 不设置llmClient，强制要求配置API Key
+	if apiKey == "" {
 		handler.useRealLLM = false
 		return handler
 	}
 
-	// 创建真实的GLM客户端
-	client, err := llm.NewGLMClient(apiKey, baseURL, model)
+	opts := &llm.LLMOptions{
+		Temperature: temperature,
+		MaxTokens:   maxTokens,
+	}
+	client, err := llm.NewLLMClient("zhipuai", apiKey, baseURL, model, opts)
 	if err != nil {
 		handler.useRealLLM = false
 		return handler
@@ -71,21 +77,21 @@ func NewQueryHandlerWithLLM(db *gorm.DB, apiKey, baseURL, model string) *QueryHa
 }
 
 // NewTwoPhaseQueryHandlerWithLLM 创建两阶段查询处理器（推荐用于大型数据库）
-func NewTwoPhaseQueryHandlerWithLLM(db *gorm.DB, apiKey, baseURL, model string) *TwoPhaseQueryHandler {
-	// 创建Schema解析器
+func NewTwoPhaseQueryHandlerWithLLM(db *gorm.DB, apiKey, baseURL, model string, temperature float64, maxTokens int) *TwoPhaseQueryHandler {
 	parser := database.NewSchemaParser(db)
 
-	// 强制要求有效的API Key
-	if apiKey == "" || apiKey == "your-api-key-here" || apiKey == "${GLM_API_KEY}" {
-		// 返回一个无效的处理器
+	if apiKey == "" {
 		return &TwoPhaseQueryHandler{
 			db:        parser,
 			llmClient: nil,
 		}
 	}
 
-	// 创建真实的GLM客户端
-	llmClient, err := llm.NewGLMClient(apiKey, baseURL, model)
+	opts := &llm.LLMOptions{
+		Temperature: temperature,
+		MaxTokens:   maxTokens,
+	}
+	llmClient, err := llm.NewLLMClient("zhipuai", apiKey, baseURL, model, opts)
 	if err != nil {
 		return &TwoPhaseQueryHandler{
 			db:        parser,
@@ -93,7 +99,6 @@ func NewTwoPhaseQueryHandlerWithLLM(db *gorm.DB, apiKey, baseURL, model string) 
 		}
 	}
 
-	// 创建两阶段处理器
 	return NewTwoPhaseQueryHandler(parser, db, llmClient)
 }
 
@@ -150,7 +155,8 @@ func (h *QueryHandler) Handle(ctx context.Context, question string) (*QueryResul
 	}
 
 	// 使用真实的LLM客户端
-	result.Metadata["llm_type"] = "GLM-4-Plus"
+	result.Metadata["llm_type"] = h.llmClient.Type()
+	result.Metadata["llm_model"] = h.llmClient.GetModel()
 	result.Metadata["use_real_llm"] = true
 
 	generatedSQL, err = h.llmClient.GenerateSQL(ctx, schema, question)
@@ -227,18 +233,12 @@ func (h *QueryHandler) GetTableInfo(tableName string) (database.TableSchema, err
 
 // SetKnowledge 设置知识库文档
 func (h *QueryHandler) SetKnowledge(docs []knowledge.Document) error {
-	// 检查LLM客户端是否支持知识库
 	if h.llmClient == nil {
 		return fmt.Errorf("LLM客户端未初始化")
 	}
 
-	// 尝试将知识库设置到LLM客户端
-	if glmClient, ok := h.llmClient.(*llm.GLMClient); ok {
-		glmClient.SetKnowledge(docs)
-		return nil
-	}
-
-	return fmt.Errorf("LLM客户端不支持知识库功能")
+	h.llmClient.SetKnowledge(docs)
+	return nil
 }
 
 // QueryHandlerInterface 查询处理器接口（用于依赖注入和测试）

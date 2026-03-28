@@ -3,7 +3,9 @@ package handler
 import (
 	"context"
 	"testing"
+
 	"github.com/channelwill/nlq/internal/database"
+	"github.com/channelwill/nlq/internal/knowledge"
 )
 
 // MockLLMClient 两阶段测试用的Mock LLM客户端
@@ -29,6 +31,12 @@ func (m *MockLLMClientForTwoPhase) GenerateContent(ctx context.Context, systemPr
 	// 返回表选择JSON
 	return m.tableSelectionResponse, nil
 }
+
+func (m *MockLLMClientForTwoPhase) SetKnowledge(docs []knowledge.Document) {}
+func (m *MockLLMClientForTwoPhase) GetKnowledge() []knowledge.Document     { return nil }
+func (m *MockLLMClientForTwoPhase) SetModel(model string)                  {}
+func (m *MockLLMClientForTwoPhase) GetModel() string                       { return "mock-model" }
+func (m *MockLLMClientForTwoPhase) Type() string                           { return "mock" }
 
 func containsTableSelectionPrompt(question string) bool {
 	// 简单判断是否是表选择请求

@@ -36,15 +36,13 @@ func main() {
 	}()
 
 	// 创建查询处理器（强制要求LLM模式）
-	if cfg.LLM.APIKey == "" || cfg.LLM.APIKey == "${GLM_API_KEY}" || cfg.LLM.APIKey == "your-api-key-here" {
-		fmt.Fprintln(os.Stderr, "❌ 错误: NLQ服务需要配置GLM API Key才能启动")
+	if cfg.LLM.APIKey == "" {
+		fmt.Fprintln(os.Stderr, "❌ 错误: NLQ服务需要配置LLM API Key才能启动")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "📝 配置步骤:")
-		fmt.Fprintln(os.Stderr, "1. 访问智谱AI开放平台: https://open.bigmodel.cn/")
-		fmt.Fprintln(os.Stderr, "2. 注册/登录账号")
-		fmt.Fprintln(os.Stderr, "3. 创建API Key")
-		fmt.Fprintln(os.Stderr, "4. 设置环境变量:")
-		fmt.Fprintln(os.Stderr, "   export GLM_API_KEY=\"your-api-key-here\"")
+		fmt.Fprintln(os.Stderr, "1. 访问 LLM 提供商平台获取 API Key")
+		fmt.Fprintln(os.Stderr, "2. 设置环境变量:")
+		fmt.Fprintln(os.Stderr, "   export LLM_API_KEY=\"your-api-key-here\"")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "然后重新启动服务器")
 		os.Exit(1)
@@ -179,24 +177,24 @@ func createQueryHandler(db *gorm.DB, cfg *config.Config) (handler.QueryHandlerIn
 	switch mode {
 	case "simple":
 		// 强制使用单步法
-		queryHandler = handler.NewQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model)
+		queryHandler = handler.NewQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model, cfg.LLM.Temperature, cfg.LLM.MaxTokens)
 		handlerType = "单步法（QueryHandler）"
 
 	case "two_phase":
 		// 强制使用两步法
-		queryHandler = handler.NewTwoPhaseQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model)
+		queryHandler = handler.NewTwoPhaseQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model, cfg.LLM.Temperature, cfg.LLM.MaxTokens)
 		handlerType = "两步法（TwoPhaseQueryHandler）"
 
 	case "auto":
 		// 自动模式：根据表数量智能选择
 		if tables <= threshold {
 			// 小型数据库：使用单步法（速度快）
-			queryHandler = handler.NewQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model)
+			queryHandler = handler.NewQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model, cfg.LLM.Temperature, cfg.LLM.MaxTokens)
 			handlerType = "单步法（QueryHandler）"
 			fmt.Printf("✅ 检测到小型数据库（%d ≤ %d），使用单步法以提高性能\n", tables, threshold)
 		} else {
 			// 大型数据库：使用两步法（精准度高）
-			queryHandler = handler.NewTwoPhaseQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model)
+			queryHandler = handler.NewTwoPhaseQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model, cfg.LLM.Temperature, cfg.LLM.MaxTokens)
 			handlerType = "两步法（TwoPhaseQueryHandler）"
 			fmt.Printf("✅ 检测到大型数据库（%d > %d），使用两步法以保证精准度\n", tables, threshold)
 		}
