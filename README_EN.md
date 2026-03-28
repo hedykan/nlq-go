@@ -370,6 +370,7 @@ NLQ/
 | [KNOWLEDGE_BASE_GUIDE.md](docs/en/KNOWLEDGE_BASE_GUIDE.md) | Knowledge Base Guide |
 | [USAGE_GUIDE.md](docs/en/USAGE_GUIDE.md) | Usage Guide |
 | [MULTI_LLM_PROVIDER.md](docs/en/MULTI_LLM_PROVIDER.md) | Multi-LLM Provider Guide |
+| [CONFIGURATION_GUIDE.md](docs/en/CONFIGURATION_GUIDE.md) | Configuration Guide |
 | [LLM_OPTIMIZATION.md](docs/en/LLM_OPTIMIZATION.md) | LLM Optimization |
 | [HTTP_LOGGING.md](docs/en/HTTP_LOGGING.md) | HTTP Logging |
 | [TESTING_GUIDE.md](docs/en/TESTING_GUIDE.md) | Testing Guide |

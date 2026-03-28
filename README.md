@@ -389,11 +389,13 @@ NLQ/
 | [KNOWLEDGE_BASE_GUIDE.md](docs/en/KNOWLEDGE_BASE_GUIDE.md) | Knowledge Base Guide |
 | [USAGE_GUIDE.md](docs/en/USAGE_GUIDE.md) | Usage Guide |
 | [MULTI_LLM_PROVIDER.md](docs/en/MULTI_LLM_PROVIDER.md) | Multi-LLM Provider Guide |
+| [CONFIGURATION_GUIDE.md](docs/en/CONFIGURATION_GUIDE.md) | Configuration Guide |
 
 ### 中文文档 (docs/zh/)
 
 | 文档 | 描述 |
 |------|------|
+| [CONFIGURATION_GUIDE.md](docs/en/CONFIGURATION_GUIDE.md) | 配置文件详解 |
 | [PLAN.md](docs/zh/PLAN.md) | 项目计划 |
 | [PROJECT_SUMMARY.md](docs/zh/PROJECT_SUMMARY.md) | 项目总结 |
 
