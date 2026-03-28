@@ -1,9 +1,13 @@
 # NLQ - Natural Language Query
 
-> A powerful natural language database query tool that uses LLM to convert natural language into SQL queries
+> 一个强大的自然语言数据库查询工具，使用LLM将自然语言转换为SQL查询
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/channelwill/nlq)](https://goreportcard.com/report/github.com/channelwill/nlq)
+[![Go Report Card](https://goreportcard.com/badge/github.com/hedykan/nlq-go)](https://goreportcard.com/report/github.com/hedykan/nlq-go)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+---
+
+**English README**: [README_EN.md](README_EN.md)
 
 ---
 
@@ -355,6 +359,8 @@ NLQ/
 │   └── security/            # SQL安全防火墙 | SQL Firewall
 ├── config/                   # 配置文件 | Config Files
 ├── docs/                     # 文档 | Documentation
+│   ├── en/                  # 英文文档 | English Docs
+│   └── zh/                  # 中文文档 | Chinese Docs
 └── Makefile                 # 构建脚本 | Build Scripts
 ```
 
@@ -374,13 +380,22 @@ NLQ/
 
 ## 📖 文档 | Documentation
 
-| 文档 | Description |
-|------|-------------|
-| [API_GUIDE.md](docs/API_GUIDE.md) | API接口文档 | API Documentation |
-| [SECURITY.md](docs/SECURITY.md) | 安全性分析 | Security Analysis |
-| [KNOWLEDGE_BASE_GUIDE.md](docs/KNOWLEDGE_BASE_GUIDE.md) | 知识库使用 | Knowledge Base Guide |
-| [USAGE_GUIDE.md](docs/USAGE_GUIDE.md) | 使用指南 | Usage Guide |
-| [ENHANCEMENT_SUMMARY.md](docs/ENHANCEMENT_SUMMARY.md) | 功能增强总结 | Enhancement Summary |
+### English Documentation (docs/en/)
+
+| Document | Description |
+|----------|-------------|
+| [API_GUIDE.md](docs/en/API_GUIDE.md) | API Documentation |
+| [SECURITY.md](docs/en/SECURITY.md) | Security Analysis |
+| [KNOWLEDGE_BASE_GUIDE.md](docs/en/KNOWLEDGE_BASE_GUIDE.md) | Knowledge Base Guide |
+| [USAGE_GUIDE.md](docs/en/USAGE_GUIDE.md) | Usage Guide |
+| [MULTI_LLM_PROVIDER.md](docs/en/MULTI_LLM_PROVIDER.md) | Multi-LLM Provider Guide |
+
+### 中文文档 (docs/zh/)
+
+| 文档 | 描述 |
+|------|------|
+| [PLAN.md](docs/zh/PLAN.md) | 项目计划 |
+| [PROJECT_SUMMARY.md](docs/zh/PROJECT_SUMMARY.md) | 项目总结 |
 
 ---
 
