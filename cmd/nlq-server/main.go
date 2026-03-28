@@ -80,6 +80,10 @@ func main() {
 		}
 	}()
 
+	// 打印查询页面链接
+	queryURL := fmt.Sprintf("http://%s:%d/query", cfg.Server.Host, cfg.Server.Port)
+	fmt.Printf("🔗 查询页面: %s\n", queryURL)
+
 	// 等待中断信号
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -119,9 +123,9 @@ func loadKnowledgeBases(queryHandler handler.QueryHandlerInterface) error {
 
 	// 定义要加载的知识库目录
 	knowledgeDirs := []string{
-		"knowledge",           // 主知识库目录
-		"knowledge/positive",  // 正面反馈知识库
-		"knowledge/negative",  // 负面反馈知识库
+		"knowledge",          // 主知识库目录
+		"knowledge/positive", // 正面反馈知识库
+		"knowledge/negative", // 负面反馈知识库
 	}
 
 	var allDocs []knowledge.Document
