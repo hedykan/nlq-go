@@ -29,6 +29,9 @@ config/config.yaml
 config/*.yaml
 !config/config.yaml.simple
 
+# Knowledge base (may contain sensitive user feedback)
+knowledge/
+
 # IDE and editor files
 .vscode/
 .idea/
