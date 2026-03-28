@@ -28,6 +28,7 @@ go.work.sum
 config/config.yaml
 config/*.yaml
 !config/config.yaml.simple
+!config/config.yaml.example
 
 # Knowledge base (may contain sensitive user feedback)
 knowledge/
