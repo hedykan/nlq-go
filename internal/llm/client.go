@@ -14,18 +14,67 @@ import (
 	"github.com/tmc/langchaingo/llms/openai"
 )
 
-type GLMClient struct {
+type LLMProvider string
+
+const (
+	ProviderOpenAI    LLMProvider = "openai"
+	ProviderZhipuAI   LLMProvider = "zhipuai"
+	ProviderAnthropic LLMProvider = "anthropic"
+	ProviderOllama    LLMProvider = "ollama"
+	ProviderAzure     LLMProvider = "azure"
+	ProviderMiniMax   LLMProvider = "minimax"
+)
+
+type LLMClient interface {
+	GenerateSQL(ctx context.Context, schema, question string) (string, error)
+	GenerateContent(ctx context.Context, systemPrompt, userPrompt string) (string, error)
+	SetKnowledge(docs []knowledge.Document)
+	GetKnowledge() []knowledge.Document
+	SetModel(model string)
+	GetModel() string
+	IsAvailable() bool
+	Type() string
+}
+
+type LLMOptions struct {
+	Temperature float64
+	MaxTokens   int
+	Timeout     time.Duration
+	MaxRetries  int
+}
+
+func DefaultLLMOptions() *LLMOptions {
+	return &LLMOptions{
+		Temperature: 0.0,
+		MaxTokens:   2048,
+		Timeout:     90 * time.Second,
+		MaxRetries:  3,
+	}
+}
+
+type OpenAIClient struct {
+	provider          LLMProvider
 	llm               *openai.LLM
 	model             string
 	timeout           time.Duration
 	maxRetries        int
+	temperature       float64
+	maxTokens         int
 	knowledgeDocs     []knowledge.Document
 	knowledgeInjector *knowledge.Injector
 }
 
-func NewGLMClient(apiKey, baseURL, model string) (*GLMClient, error) {
+func (p *OpenAIClient) Type() string { return string(p.provider) }
+
+func NewOpenAIClient(provider, apiKey, baseURL, model string, temperature float64, maxTokens int) (*OpenAIClient, error) {
 	if model == "" {
 		model = "glm-4-plus"
+	}
+	if temperature == 0 {
+		temperature = 0.0
+	}
+	if maxTokens == 0 {
+		maxTokens = 2048
 	}
 
 	baseURL = strings.TrimRight(baseURL, "/")
@@ -36,9 +85,12 @@ func NewGLMClient(apiKey, baseURL, model string) (*GLMClient, error) {
 	httpClient := &http.Client{
 		Timeout: 120 * time.Second,
 	}
+
+	normalizedBaseURL := normalizeBaseURL(provider, baseURL)
+
 	llmInstance, err := openai.New(
 		openai.WithToken(apiKey),
-		openai.WithBaseURL(baseURL),
+		openai.WithBaseURL(normalizedBaseURL),
 		openai.WithModel(model),
 		openai.WithHTTPClient(httpClient),
 	)
@@ -46,14 +98,63 @@ func NewGLMClient(apiKey, baseURL, model string) (*GLMClient, error) {
 		return nil, fmt.Errorf("创建LLM客户端失败: %w", err)
 	}
 
-	return &GLMClient{
+	return &OpenAIClient{
+		provider:          LLMProvider(provider),
 		llm:               llmInstance,
 		model:             model,
 		timeout:           90 * time.Second,
 		maxRetries:        3,
+		temperature:       temperature,
+		maxTokens:         maxTokens,
 		knowledgeDocs:     []knowledge.Document{},
 		knowledgeInjector: knowledge.NewInjector(),
 	}, nil
+}
+
+func normalizeBaseURL(provider, baseURL string) string {
+	baseURL = strings.TrimRight(baseURL, "/")
+
+	switch strings.ToLower(provider) {
+	case "zhipuai":
+		if strings.Contains(baseURL, "bigmodel.cn") {
+			return baseURL
+		}
+		return baseURL
+	case "minimax":
+		if !strings.Contains(baseURL, "minimax") && !strings.Contains(baseURL, "api.minimaxi.com") {
+			return "https://api.minimaxi.com"
+		}
+		return baseURL
+	case "openai", "azure":
+		return baseURL
+	}
+	return baseURL
+}
+
+func NewLLMClient(provider, apiKey, baseURL, model string, opts ...*LLMOptions) (LLMClient, error) {
+	if apiKey == "" {
+		return nil, errors.New("API key is required")
+	}
+
+	options := DefaultLLMOptions()
+	if len(opts) > 0 && opts[0] != nil {
+		options = opts[0]
+		if options.Temperature == 0 {
+			options.Temperature = 0.0
+		}
+		if options.MaxTokens == 0 {
+			options.MaxTokens = 2048
+		}
+	}
+
+	normalizedBaseURL := normalizeBaseURL(provider, baseURL)
+
+	switch strings.ToLower(provider) {
+	case "openai", "zhipuai", "azure", "minimax":
+		return NewOpenAIClient(provider, apiKey, normalizedBaseURL, model, options.Temperature, options.MaxTokens)
+	default:
+		return NewOpenAIClient("openai", apiKey, normalizedBaseURL, model, options.Temperature, options.MaxTokens)
+	}
 }
 
 type RateLimitError struct {
@@ -73,7 +174,7 @@ func (e *EmptyResponseError) Error() string {
 	return fmt.Sprintf("API返回空响应: %s", e.Message)
 }
 
-func (c *GLMClient) GenerateSQL(ctx context.Context, schema, question string) (string, error) {
+func (c *OpenAIClient) GenerateSQL(ctx context.Context, schema, question string) (string, error) {
 	utils.Info("🤖 [LLM] 开始生成SQL...")
 	utils.Debug("🤖 [LLM] 问题: %s", question)
 
@@ -96,19 +197,12 @@ func (c *GLMClient) GenerateSQL(ctx context.Context, schema, question string) (s
 		llms.TextParts(llms.ChatMessageTypeHuman, userPrompt),
 	}
 
-	// ========== 性能优化配置 (2026-03-28 测试得出) ==========
-	// 最优配置: temp=0.0, tokens=2048 → 91秒→9秒 (10倍提升)
-	testTemperature := 0.0 // 贪心策略，最快
-	testMaxTokens := 2048  // 足够生成SQL，避免过大(4096反而更慢)
-	// ==================================
-
-	// 构建调用选项
 	callOptions := []llms.CallOption{
-		llms.WithMaxTokens(testMaxTokens),
-		llms.WithTemperature(testTemperature),
+		llms.WithMaxTokens(c.maxTokens),
+		llms.WithTemperature(c.temperature),
 	}
 
-	utils.Debug("🤖 [LLM] 模型: %s | Temperature: %.1f | MaxTokens: %d", c.model, testTemperature, testMaxTokens)
+	utils.Debug("🤖 [LLM] 模型: %s | Temperature: %.1f | MaxTokens: %d", c.model, c.temperature, c.maxTokens)
 
 	startTime := time.Now()
 	resp, err := c.llm.GenerateContent(ctx, messages, callOptions...)
@@ -116,21 +210,21 @@ func (c *GLMClient) GenerateSQL(ctx context.Context, schema, question string) (s
 	utils.Info("⏱️  [LLM API] 响应时间: %dms", duration.Milliseconds())
 
 	if err != nil {
-		utils.Error("❌ [LLM] 调用GLM API失败: %v", err)
-		return "", fmt.Errorf("调用GLM API失败: %w", err)
+		utils.Error("❌ [LLM] 调用LLM API失败: %v", err)
+		return "", fmt.Errorf("调用LLM API失败: %w", err)
 	}
 
 	if len(resp.Choices) == 0 {
-		utils.Error("❌ [LLM] GLM API返回空响应")
-		return "", errors.New("GLM API返回空响应")
+		utils.Error("❌ [LLM] LLM API返回空响应")
+		return "", errors.New("LLM API返回空响应")
 	}
 
 	content := resp.Choices[0].Content
 	utils.Info("🤖 [LLM] API返回内容: %s", content)
 
 	if strings.TrimSpace(content) == "" {
-		utils.Error("❌ [LLM] GLM API返回空内容")
-		return "", &EmptyResponseError{Message: "GLM API返回空内容"}
+		utils.Error("❌ [LLM] LLM API返回空内容")
+		return "", &EmptyResponseError{Message: "LLM API返回空内容"}
 	}
 
 	sql, err := ParseSQLFromResponse(content)
@@ -150,7 +244,7 @@ func (c *GLMClient) GenerateSQL(ctx context.Context, schema, question string) (s
 	return sql, nil
 }
 
-func (c *GLMClient) GenerateSQLWithRetry(ctx context.Context, schema, question string) (string, error) {
+func (c *OpenAIClient) GenerateSQLWithRetry(ctx context.Context, schema, question string) (string, error) {
 	var lastErr error
 
 	for i := 0; i < c.maxRetries; i++ {
@@ -174,7 +268,7 @@ func (c *GLMClient) GenerateSQLWithRetry(ctx context.Context, schema, question s
 	return "", fmt.Errorf("重试%d次后仍然失败: %w", c.maxRetries, lastErr)
 }
 
-func (c *GLMClient) GenerateContent(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+func (c *OpenAIClient) GenerateContent(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
 	var lastErr error
 
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
@@ -202,7 +296,7 @@ func (c *GLMClient) GenerateContent(ctx context.Context, systemPrompt, userPromp
 		}
 
 		if len(resp.Choices) == 0 {
-			lastErr = errors.New("GLM API返回空响应")
+			lastErr = errors.New("LLM API返回空响应")
 			continue
 		}
 
@@ -212,7 +306,7 @@ func (c *GLMClient) GenerateContent(ctx context.Context, systemPrompt, userPromp
 	return "", fmt.Errorf("重试%d次后仍然失败: %w", c.maxRetries, lastErr)
 }
 
-func (c *GLMClient) CorrectSQL(ctx context.Context, sql, errorMsg, schema string) (string, error) {
+func (c *OpenAIClient) CorrectSQL(ctx context.Context, sql, errorMsg, schema string) (string, error) {
 	prompt, err := BuildSQLCorrectionPrompt(sql, errorMsg, schema)
 	if err != nil {
 		return "", fmt.Errorf("构建修正Prompt失败: %w", err)
@@ -230,11 +324,11 @@ func (c *GLMClient) CorrectSQL(ctx context.Context, sql, errorMsg, schema string
 		llms.WithTemperature(0.1),
 	)
 	if err != nil {
-		return "", fmt.Errorf("调用GLM API失败: %w", err)
+		return "", fmt.Errorf("调用LLM API失败: %w", err)
 	}
 
 	if len(resp.Choices) == 0 {
-		return "", errors.New("GLM API返回空响应")
+		return "", errors.New("LLM API返回空响应")
 	}
 
 	content := resp.Choices[0].Content
@@ -251,45 +345,52 @@ func (c *GLMClient) CorrectSQL(ctx context.Context, sql, errorMsg, schema string
 	return correctedSQL, nil
 }
 
-func (c *GLMClient) SetTimeout(timeout time.Duration) {
+func (c *OpenAIClient) SetTimeout(timeout time.Duration) {
 	c.timeout = timeout
 }
 
-func (c *GLMClient) SetModel(model string) {
+func (c *OpenAIClient) SetModel(model string) {
 	c.model = model
 }
 
-func (c *GLMClient) GetModel() string {
+func (c *OpenAIClient) GetModel() string {
 	return c.model
 }
 
-func (c *GLMClient) SetKnowledge(docs []knowledge.Document) {
+func (c *OpenAIClient) SetKnowledge(docs []knowledge.Document) {
 	c.knowledgeDocs = docs
 }
 
-func (c *GLMClient) GetKnowledge() []knowledge.Document {
+func (c *OpenAIClient) GetKnowledge() []knowledge.Document {
 	return c.knowledgeDocs
 }
 
-func (c *GLMClient) IsAvailable() bool {
+func (c *OpenAIClient) IsAvailable() bool {
 	return c.llm != nil
 }
 
-type MockGLMClient struct {
+type MockLLMClient struct {
+	provider  string
+	model     string
 	responses map[string]string
+	knowledge []knowledge.Document
 }
 
-func NewMockGLMClient() *MockGLMClient {
-	return &MockGLMClient{
+func NewMockLLMClient() *MockLLMClient {
+	return &MockLLMClient{
+		provider:  "mock",
+		model:     "mock-model",
 		responses: make(map[string]string),
 	}
 }
 
-func (m *MockGLMClient) SetResponse(question, sql string) {
+func (m *MockLLMClient) Type() string { return m.provider }
+
+func (m *MockLLMClient) SetResponse(question, sql string) {
 	m.responses[question] = sql
 }
 
-func (m *MockGLMClient) GenerateSQL(ctx context.Context, schema, question string) (string, error) {
+func (m *MockLLMClient) GenerateSQL(ctx context.Context, schema, question string) (string, error) {
 	if sql, ok := m.responses[question]; ok {
 		return sql, nil
 	}
@@ -320,7 +421,27 @@ func (m *MockGLMClient) GenerateSQL(ctx context.Context, schema, question string
 	return "", fmt.Errorf("无法理解问题: %s", question)
 }
 
-func (m *MockGLMClient) IsAvailable() bool {
+func (m *MockLLMClient) GenerateContent(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	return "", errors.New("mock client does not support GenerateContent")
+}
+
+func (m *MockLLMClient) SetKnowledge(docs []knowledge.Document) {
+	m.knowledge = docs
+}
+
+func (m *MockLLMClient) GetKnowledge() []knowledge.Document {
+	return m.knowledge
+}
+
+func (m *MockLLMClient) SetModel(model string) {
+	m.model = model
+}
+
+func (m *MockLLMClient) GetModel() string {
+	return m.model
+}
+
+func (m *MockLLMClient) IsAvailable() bool {
 	return true
 }
 
@@ -330,7 +451,7 @@ type StreamChunk struct {
 	Error    string `json:"error"`
 }
 
-func (c *GLMClient) GenerateSQLStream(ctx context.Context, schema, question string, callback func(StreamChunk)) error {
+func (c *OpenAIClient) GenerateSQLStream(ctx context.Context, schema, question string, callback func(StreamChunk)) error {
 	utils.Info("🤖 [LLM] 开始流式生成SQL...")
 
 	systemPrompt := GenerateSystemPrompt()

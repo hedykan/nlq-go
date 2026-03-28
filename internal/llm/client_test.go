@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-// TestGLMClient_NewGLMClient 测试创建GLM客户端
-func TestGLMClient_NewGLMClient(t *testing.T) {
-	client, err := NewGLMClient("test-api-key", "https://api.example.com", "glm-4-plus")
+// TestOpenAIClient_NewOpenAIClient 测试创建OpenAI客户端
+func TestOpenAIClient_NewOpenAIClient(t *testing.T) {
+	client, err := NewOpenAIClient("openai", "test-api-key", "https://api.example.com", "gpt-4", 0.0, 2048)
 	if err != nil {
 		t.Fatalf("创建客户端失败: %v", err)
 	}
@@ -18,6 +18,9 @@ func TestGLMClient_NewGLMClient(t *testing.T) {
 	}
 	if !client.IsAvailable() {
 		t.Error("期望客户端可用")
+	}
+	if client.Type() != "openai" {
+		t.Errorf("期望类型为openai，实际为%s", client.Type())
 	}
 }
 

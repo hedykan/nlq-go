@@ -32,9 +32,9 @@ var (
 	knowledgePath string
 	serverURL     string // 服务器地址
 	// 存储最后的查询上下文（用于反馈）
-	lastQueryID   string
-	lastQuestion  string
-	lastSQL       string
+	lastQueryID  string
+	lastQuestion string
+	lastSQL      string
 )
 
 func main() {
@@ -204,19 +204,19 @@ func queryViaServerWithURL(question, serverAddr string) error {
 
 	// 解析响应
 	var result struct {
-		Success    bool                   `json:"success"`
-		Question   string                 `json:"question"`
-		SQL        string                 `json:"sql"`
+		Success    bool                     `json:"success"`
+		Question   string                   `json:"question"`
+		SQL        string                   `json:"sql"`
 		Result     []map[string]interface{} `json:"result"`
-		Count      int                    `json:"count"`
-		DurationMs int64                  `json:"duration_ms"`
-		QueryID    string                 `json:"query_id"`
+		Count      int                      `json:"count"`
+		DurationMs int64                    `json:"duration_ms"`
+		QueryID    string                   `json:"query_id"`
 		Feedback   *struct {
 			PositiveURL string `json:"positive_url"`
 			NegativeURL string `json:"negative_url"`
 			ExpiresAt   int64  `json:"expires_at"`
 		} `json:"feedback"`
-		Error      string `json:"error"`
+		Error string `json:"error"`
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -261,16 +261,16 @@ func queryDirectly(question string) error {
 	}()
 
 	// 创建查询处理器（强制要求LLM模式）
-	if cfg.LLM.APIKey == "" || cfg.LLM.APIKey == "${GLM_API_KEY}" || cfg.LLM.APIKey == "your-api-key-here" {
-		fmt.Fprintln(os.Stderr, "❌ 错误: NLQ服务需要配置GLM API Key才能使用")
+	if cfg.LLM.APIKey == "" {
+		fmt.Fprintln(os.Stderr, "❌ 错误: NLQ服务需要配置LLM API Key才能使用")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "📝 提示: 使用 --server 参数通过服务器查询可以获得反馈功能")
 		os.Exit(1)
 	}
 
-	queryHandler := handler.NewQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model)
+	queryHandler := handler.NewQueryHandlerWithLLM(db, cfg.LLM.APIKey, cfg.LLM.BaseURL, cfg.LLM.Model, cfg.LLM.Temperature, cfg.LLM.MaxTokens)
 	if verbose {
-		fmt.Printf("🤖 使用GLM4.7 LLM: %s\n", cfg.LLM.Model)
+		fmt.Printf("🤖 使用 %s LLM: %s\n", cfg.LLM.Provider, cfg.LLM.Model)
 	}
 
 	// 加载知识库（如果指定）
@@ -345,19 +345,19 @@ func queryDirectly(question string) error {
 
 // displayServerResult 显示服务器查询结果
 func displayServerResult(result *struct {
-	Success    bool                   `json:"success"`
-	Question   string                 `json:"question"`
-	SQL        string                 `json:"sql"`
+	Success    bool                     `json:"success"`
+	Question   string                   `json:"question"`
+	SQL        string                   `json:"sql"`
 	Result     []map[string]interface{} `json:"result"`
-	Count      int                    `json:"count"`
-	DurationMs int64                  `json:"duration_ms"`
-	QueryID    string                 `json:"query_id"`
+	Count      int                      `json:"count"`
+	DurationMs int64                    `json:"duration_ms"`
+	QueryID    string                   `json:"query_id"`
 	Feedback   *struct {
 		PositiveURL string `json:"positive_url"`
 		NegativeURL string `json:"negative_url"`
 		ExpiresAt   int64  `json:"expires_at"`
 	} `json:"feedback"`
-	Error      string `json:"error"`
+	Error string `json:"error"`
 }) {
 	if jsonOutput {
 		fmt.Printf("{\"question\":\"%s\",\"sql\":\"%s\",\"count\":%d,\"duration_ms\":%d,\"query_id\":\"%s\"}\n",
@@ -480,7 +480,6 @@ func displayFeedbackHintFromServer(queryID string, feedback *struct {
 	fmt.Printf("   👎 %s\n", feedback.NegativeURL)
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 }
-
 
 // runSQL 执行SQL
 func runSQL(cmd *cobra.Command, args []string) error {
@@ -1005,7 +1004,7 @@ func runFeedback(cmd *cobra.Command, args []string) error {
 		"correct_sql":  correctSQL,
 	}
 
-	_ = apiURL     // TODO: 实际提交到服务器
+	_ = apiURL      // TODO: 实际提交到服务器
 	_ = requestBody // TODO: 实际提交到服务器
 
 	// 执行 curl 命令
@@ -1064,7 +1063,6 @@ func displayFeedbackHint(queryID string) {
 	fmt.Printf("   %s feedback %s negative  # 不符合预期\n", os.Args[0], queryID)
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 }
-
 
 // recordExecutionError 记录SQL执行错误到服务器
 func recordExecutionError(question, sql, errorMsg string) {
