@@ -395,7 +395,7 @@ NLQ/
 
 | 文档 | 描述 |
 |------|------|
-| [CONFIGURATION_GUIDE.md](docs/en/CONFIGURATION_GUIDE.md) | 配置文件详解 |
+| [CONFIGURATION_GUIDE.md](docs/zh/CONFIGURATION_GUIDE.md) | 配置文件详解 |
 | [PLAN.md](docs/zh/PLAN.md) | 项目计划 |
 | [PROJECT_SUMMARY.md](docs/zh/PROJECT_SUMMARY.md) | 项目总结 |
 
