@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -465,6 +466,11 @@ func (h *FeedbackHandler) appendToPendingPool(queryID string, context *feedback.
 		targetFile = "knowledge/positive/positive_pool.md"
 	} else {
 		targetFile = "knowledge/negative/negative_pool.md"
+	}
+
+	// 递归创建目录（不存在时自动创建）
+	if err := os.MkdirAll(filepath.Dir(targetFile), 0755); err != nil {
+		return fmt.Errorf("创建目录失败: %w", err)
 	}
 
 	// 格式化条目

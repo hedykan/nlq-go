@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -306,6 +307,11 @@ func appendToPendingPoolFile(queryID string, context *feedback.QueryContext, isP
 	}
 
 	builder.WriteString("\n")
+
+	// 递归创建目录（不存在时自动创建）
+	if err := os.MkdirAll(filepath.Dir(targetFile), 0755); err != nil {
+		return fmt.Errorf("创建目录失败: %w", err)
+	}
 
 	// 打开文件（追加模式）
 	f, err := os.OpenFile(targetFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
