@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/channelwill/nlq/internal/feedback"
+	"github.com/channelwill/nlq/internal/handler"
 	"github.com/channelwill/nlq/pkg/utils"
 	"github.com/gorilla/websocket"
 )
@@ -124,12 +125,6 @@ func (ws *WebSocketServer) handleQuery(conn *websocket.Conn, message WebSocketMe
 		return
 	}
 
-	// 提取verbose选项
-	verbose := false
-	if v, ok := message.Data["verbose"].(bool); ok {
-		verbose = v
-	}
-
 	// 发送处理中消息
 	ws.sendMessage(conn, WebSocketMessage{
 		Type: "processing",
@@ -140,54 +135,21 @@ func (ws *WebSocketServer) handleQuery(conn *websocket.Conn, message WebSocketMe
 
 	// 执行查询
 	ctx := context.Background()
-	result, err := ws.handler.Handle(ctx, question)
 
+	// 如果是 Agent 处理器，使用带进度的回调
+	if agentHandler, ok := ws.handler.(*handler.AgentQueryHandler); ok {
+		ws.handleAgentQuery(conn, ctx, question, agentHandler)
+		return
+	}
+
+	// 旧版处理器兼容
+	result, err := ws.handler.Handle(ctx, question)
 	if err != nil {
 		ws.sendError(conn, fmt.Sprintf("查询失败: %v", err))
 		return
 	}
 
-	// 生成QueryID
-	queryID := utils.GenerateQueryID()
-
-	// 存储查询上下文（供反馈使用）
-	queryContext := &feedback.QueryContext{
-		QueryID:   queryID,
-		Question:  result.Question,
-		SQL:       result.SQL,
-		Timestamp: time.Now(),
-		ExpiresAt: time.Now().Add(24 * time.Hour),
-	}
-	if result.Result != nil {
-		queryContext.Result = result.Result.Rows
-	}
-	_ = ws.feedbackStorage.SetQueryContext(queryContext) // 忽略错误，不阻止查询
-
-	// 发送结果（包含反馈链接）
-	response := WebSocketMessage{
-		Type: "result",
-		Data: map[string]interface{}{
-			"success":    true,
-			"question":   result.Question,
-			"sql":        result.SQL,
-			"result":     result.Result.Rows,
-			"count":      result.Result.Count,
-			"durationMs": result.Duration.Milliseconds(),
-			"metadata":   result.Metadata,
-			"query_id":   queryID,
-			"feedback": map[string]interface{}{
-				"message":    "如果结果符合预期，请发送 feedback 消息，type 为 'positive' 或 'negative'",
-				"query_id":   queryID,
-				"expires_at": time.Now().Add(24 * time.Hour).Unix(),
-			},
-		},
-	}
-
-	if verbose {
-		response.Data["verbose"] = true
-	}
-
-	ws.sendMessage(conn, response)
+	ws.sendQueryResult(conn, result, question)
 }
 
 // handleFeedback 处理反馈消息
@@ -358,4 +320,81 @@ func appendToPendingPoolFile(queryID string, context *feedback.QueryContext, isP
 	}
 
 	return nil
+}
+
+// handleAgentQuery 使用 Agent 处理器处理 WebSocket 查询（带进度推送）
+func (ws *WebSocketServer) handleAgentQuery(conn *websocket.Conn, ctx context.Context, question string, agentHandler *handler.AgentQueryHandler) {
+	// 进度回调：每个 Agent 步骤都通过 WebSocket 推送
+	callback := func(step handler.AgentStep) {
+		ws.sendMessage(conn, WebSocketMessage{
+			Type: "agent_step",
+			Data: map[string]interface{}{
+				"turn":     step.Turn,
+				"action":   step.Action,
+				"detail":   step.Detail,
+				"duration": step.Duration.Milliseconds(),
+				"data":     step.Data,
+			},
+		})
+	}
+
+	result, err := agentHandler.HandleWithProgress(ctx, question, callback)
+	if err != nil {
+		ws.sendError(conn, fmt.Sprintf("查询失败: %v", err))
+		return
+	}
+
+	ws.sendQueryResult(conn, result, question)
+}
+
+// sendQueryResult 发送查询结果（公共方法，WebSocket和Agent共用）
+func (ws *WebSocketServer) sendQueryResult(conn *websocket.Conn, result *handler.QueryResult, question string) {
+	queryID := utils.GenerateQueryID()
+
+	// 存储查询上下文
+	queryContext := &feedback.QueryContext{
+		QueryID:   queryID,
+		Question:  question,
+		SQL:       result.SQL,
+		Timestamp: time.Now(),
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	if result.Result != nil {
+		queryContext.Result = result.Result.Rows
+	}
+	_ = ws.feedbackStorage.SetQueryContext(queryContext)
+
+	// 构建响应数据
+	responseData := map[string]interface{}{
+		"success":    true,
+		"question":   result.Question,
+		"sql":        result.SQL,
+		"durationMs": result.Duration.Milliseconds(),
+		"metadata":   result.Metadata,
+		"query_id":   queryID,
+		"feedback": map[string]interface{}{
+			"message":    "如果结果符合预期，请发送 feedback 消息，type 为 'positive' 或 'negative'",
+			"query_id":   queryID,
+			"expires_at": time.Now().Add(24 * time.Hour).Unix(),
+		},
+	}
+
+	if result.Result != nil {
+		responseData["result"] = result.Result.Rows
+		responseData["count"] = result.Result.Count
+	}
+
+	if result.Error != "" {
+		responseData["success"] = false
+		responseData["error"] = result.Error
+	}
+
+	if len(result.Steps) > 0 {
+		responseData["steps"] = result.Steps
+	}
+
+	ws.sendMessage(conn, WebSocketMessage{
+		Type: "result",
+		Data: responseData,
+	})
 }

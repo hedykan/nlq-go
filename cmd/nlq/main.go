@@ -936,7 +936,7 @@ func startsWith(s, prefix string) bool {
 // loadKnowledgeBase 加载知识库并设置到查询处理器
 
 // loadKnowledgeBase 加载知识库并设置到查询处理器
-func loadKnowledgeBase(queryHandler *handler.QueryHandler, knowledgePath string, verbose bool) error {
+func loadKnowledgeBase(queryHandler *handler.LegacyQueryHandler, knowledgePath string, verbose bool) error {
 	// 创建知识库加载器
 	loader := knowledge.NewLoader()
 

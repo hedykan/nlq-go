@@ -87,8 +87,14 @@ type FieldAliasConfig struct {
 
 // QueryConfig 查询处理器配置
 type QueryConfig struct {
-	Mode                string `mapstructure:"mode"`                  // 处理模式: "auto"(自动), "simple"(单步), "two_phase"(两步)
-	TableCountThreshold int    `mapstructure:"table_count_threshold"` // 表数量阈值（自动模式下使用）
+	Agent AgentConfig `mapstructure:"agent"` // Agent模式配置
+}
+
+// AgentConfig Agent查询处理器配置
+type AgentConfig struct {
+	MaxSelfCorrect int  `mapstructure:"max_self_correct"` // SQL自检修正最大次数，默认3
+	MaxTurns       int  `mapstructure:"max_turns"`        // 最大总轮次，默认5
+	Verbose        bool `mapstructure:"verbose"`         // 返回中间推理过程，默认false
 }
 
 // LoadConfig 使用viper加载配置
@@ -186,8 +192,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.enable_cors", true)
 
 	// 查询处理器默认值
-	v.SetDefault("query.mode", "auto")              // 默认自动模式
-	v.SetDefault("query.table_count_threshold", 20) // 默认表数量阈值为20
+	v.SetDefault("query.agent.max_self_correct", 3) // 默认自检修正3次
+	v.SetDefault("query.agent.max_turns", 5)        // 默认最大5轮
+	v.SetDefault("query.agent.verbose", false)       // 默认不返回中间过程
 }
 
 // bindEnvVars 绑定环境变量（向后兼容，支持无前缀的环境变量）

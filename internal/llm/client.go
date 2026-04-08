@@ -28,6 +28,7 @@ const (
 type LLMClient interface {
 	GenerateSQL(ctx context.Context, schema, question string) (string, error)
 	GenerateContent(ctx context.Context, systemPrompt, userPrompt string) (string, error)
+	GenerateWithHistory(ctx context.Context, messages []llms.MessageContent) (string, error)
 	SetKnowledge(docs []knowledge.Document)
 	GetKnowledge() []knowledge.Document
 	SetModel(model string)
@@ -61,7 +62,6 @@ type OpenAIClient struct {
 	temperature       float64
 	maxTokens         int
 	knowledgeDocs     []knowledge.Document
-	knowledgeInjector *knowledge.Injector
 }
 
 func (p *OpenAIClient) Type() string { return string(p.provider) }
@@ -107,7 +107,6 @@ func NewOpenAIClient(provider, apiKey, baseURL, model string, temperature float6
 		temperature:       temperature,
 		maxTokens:         maxTokens,
 		knowledgeDocs:     []knowledge.Document{},
-		knowledgeInjector: knowledge.NewInjector(),
 	}, nil
 }
 
@@ -187,10 +186,8 @@ func (c *OpenAIClient) GenerateSQL(ctx context.Context, schema, question string)
 
 	utils.Debug("🤖 [LLM] User Prompt长度: %d字符", len(userPrompt))
 
-	if len(c.knowledgeDocs) > 0 {
-		userPrompt = c.knowledgeInjector.Inject(userPrompt, c.knowledgeDocs)
-		utils.Debug("🤖 [LLM] 已注入知识库文档")
-	}
+	// 注意：知识库注入已由 Agent 模式的 KnowledgeRouter 接管
+	// 此处保留 knowledgeDocs 仅用于接口兼容
 
 	messages := []llms.MessageContent{
 		llms.TextParts(llms.ChatMessageTypeSystem, systemPrompt),
@@ -304,6 +301,30 @@ func (c *OpenAIClient) GenerateContent(ctx context.Context, systemPrompt, userPr
 	}
 
 	return "", fmt.Errorf("重试%d次后仍然失败: %w", c.maxRetries, lastErr)
+}
+
+func (c *OpenAIClient) GenerateWithHistory(ctx context.Context, messages []llms.MessageContent) (string, error) {
+	if len(messages) == 0 {
+		return "", fmt.Errorf("消息列表不能为空")
+	}
+
+	startTime := time.Now()
+	resp, err := c.llm.GenerateContent(ctx, messages,
+		llms.WithMaxTokens(c.maxTokens),
+		llms.WithTemperature(c.temperature),
+	)
+	duration := time.Since(startTime)
+	utils.Info("⏱️  [LLM API] GenerateWithHistory 响应时间: %dms, 消息数: %d", duration.Milliseconds(), len(messages))
+
+	if err != nil {
+		return "", fmt.Errorf("GenerateWithHistory 调用失败: %w", err)
+	}
+
+	if len(resp.Choices) == 0 {
+		return "", errors.New("GenerateWithHistory 返回空响应")
+	}
+
+	return resp.Choices[0].Content, nil
 }
 
 func (c *OpenAIClient) CorrectSQL(ctx context.Context, sql, errorMsg, schema string) (string, error) {
@@ -425,6 +446,10 @@ func (m *MockLLMClient) GenerateContent(ctx context.Context, systemPrompt, userP
 	return "", errors.New("mock client does not support GenerateContent")
 }
 
+func (m *MockLLMClient) GenerateWithHistory(ctx context.Context, messages []llms.MessageContent) (string, error) {
+	return "", errors.New("mock client does not support GenerateWithHistory")
+}
+
 func (m *MockLLMClient) SetKnowledge(docs []knowledge.Document) {
 	m.knowledge = docs
 }
@@ -461,7 +486,8 @@ func (c *OpenAIClient) GenerateSQLStream(ctx context.Context, schema, question s
 	}
 
 	if len(c.knowledgeDocs) > 0 {
-		userPrompt = c.knowledgeInjector.Inject(userPrompt, c.knowledgeDocs)
+		// 知识库注入已由 Agent 模式的 KnowledgeRouter 接管
+		_ = c.knowledgeDocs // 保留引用以避免 unused 警告
 	}
 
 	messages := []llms.MessageContent{

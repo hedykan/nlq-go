@@ -59,6 +59,7 @@ type QueryResponse struct {
 	DurationMs int64                  `json:"duration_ms"`
 	Error      string                 `json:"error,omitempty"`
 	Metadata   map[string]interface{} `json:"metadata,omitempty"`
+	Steps      []handler.AgentStep    `json:"steps,omitempty"` // Agent推理步骤
 
 	// 新增：反馈相关字段
 	QueryID  string        `json:"query_id,omitempty"`  // 查询唯一标识
@@ -265,6 +266,7 @@ func (h *QueryHandler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 		Metadata:   result.Metadata,
 		QueryID:    queryID,
 		Feedback:   h.generateFeedbackLinks(queryID, r),
+		Steps:      result.Steps,
 	}
 
 	// 转换结果数据（检查Result是否为nil）
