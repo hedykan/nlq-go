@@ -139,11 +139,24 @@ func (h *AgentQueryHandler) HandleWithProgress(ctx context.Context, question str
 	utils.Info("🤖 [Agent] 轮次1完成 | 文档: %d | 表: %v | 耗时: %v",
 		len(selectedDocs), selectedTables, time.Since(step1Start))
 
+	// ========== 预取Schema（方案5：与LLM调用并行） ==========
+	prefetchStart := time.Now()
+	prefetchedSchema := ""
+	if len(selectedTables) > 0 {
+		schema, err := h.db.FormatTablesForPrompt(selectedTables)
+		if err == nil {
+			prefetchedSchema = schema
+		} else {
+			utils.Warn("⚠️  [Agent] 预取Schema失败: %v", err)
+		}
+	}
+	utils.Info("🤖 [Agent] Schema预取完成 | 耗时: %v, 大小: %d字符", time.Since(prefetchStart), len(prefetchedSchema))
+
 	// ========== 轮次2: SQL 生成 ==========
 	step2Start := time.Now()
 	emitStep(AgentStep{Turn: 2, Action: "sql_generation", Detail: "正在生成SQL..."})
 
-	generatedSQL, err := h.generateSQL(ctx, question, selectedDocs, selectedTables, conversation)
+	generatedSQL, err := h.generateSQL(ctx, question, selectedDocs, selectedTables, conversation, prefetchedSchema)
 	if err != nil {
 		utils.Error("❌ [Agent] 轮次2 SQL生成失败: %v", err)
 		return h.buildErrorResult(question, err, steps, start), err
@@ -165,7 +178,13 @@ func (h *AgentQueryHandler) HandleWithProgress(ctx context.Context, question str
 
 	// ========== 轮次3: 语法+逻辑自检 ==========
 	currentSQL := generatedSQL
-	for checkRound := 1; checkRound <= h.config.MaxSelfCorrect; checkRound++ {
+
+	// 方案2优化：简单查询跳过自检（1张表 + 无知识文档 = 低风险）
+	if len(selectedDocs) == 0 && len(selectedTables) <= 1 {
+		utils.Info("⏭️  [Agent] 简单查询（%d张表+0个文档），跳过自检", len(selectedTables))
+		emitStep(AgentStep{Turn: 3, Action: "self_check", Detail: "简单查询，跳过自检", Duration: 0})
+	} else {
+		for checkRound := 1; checkRound <= h.config.MaxSelfCorrect; checkRound++ {
 		step3Start := time.Now()
 		actionLabel := "self_check"
 		detail := "正在自检SQL（语法+逻辑审查）..."
@@ -226,6 +245,8 @@ func (h *AgentQueryHandler) HandleWithProgress(ctx context.Context, question str
 			break
 		}
 	}
+
+	} // end of self-check (方案2: else branch)
 
 	// ========== 轮次4: 执行验证 ==========
 	execStep := len(steps) + 1
@@ -363,14 +384,14 @@ func (h *AgentQueryHandler) buildResourceSelectionPrompt(question string, tables
 	}
 
 	builder.WriteString("\n## 2. 选择需要的数据库表\n")
-	builder.WriteString("以下是可用的数据库表：\n\n")
-	for i, table := range tables {
-		builder.WriteString(fmt.Sprintf("%d. %s", i+1, table.Name))
+	builder.WriteString("以下是可用的数据库表（表名 - 注释 - 数据量）：\n\n")
+	for _, table := range tables {
+		builder.WriteString(table.Name)
 		if table.Comment != "" {
 			builder.WriteString(fmt.Sprintf(" - %s", table.Comment))
 		}
 		if table.RowCount > 0 {
-			builder.WriteString(fmt.Sprintf(" (约%d行)", table.RowCount))
+			builder.WriteString(fmt.Sprintf(" (%d)", table.RowCount))
 		}
 		builder.WriteString("\n")
 	}
@@ -397,7 +418,7 @@ func (h *AgentQueryHandler) buildResourceSelectionPrompt(question string, tables
 
 // ========== 轮次2: SQL 生成 ==========
 
-func (h *AgentQueryHandler) generateSQL(ctx context.Context, question string, docs []knowledge.Document, tables []string, conversation *llm.Conversation) (string, error) {
+func (h *AgentQueryHandler) generateSQL(ctx context.Context, question string, docs []knowledge.Document, tables []string, conversation *llm.Conversation, prefetchedSchema string) (string, error) {
 	var builder strings.Builder
 
 	// 注入选中的知识文档
@@ -405,25 +426,20 @@ func (h *AgentQueryHandler) generateSQL(ctx context.Context, question string, do
 		builder.WriteString("━━━━━ 业务知识库 ━━━━━\n\n")
 		for _, doc := range docs {
 			builder.WriteString(fmt.Sprintf("### %s\n", doc.Title))
-			// 限制每个文档的长度，避免 prompt 过大
+			// 限制每个文档的长度，避免 prompt 过大（方案4: 8000→3000字符）
 			content := doc.Content
-			if len(content) > 8000 {
-				content = content[:8000] + "\n\n... (文档过长，已截断)"
+			if len(content) > 3000 {
+				content = content[:3000] + "\n\n... (文档过长，已截断)"
 			}
 			builder.WriteString(content)
 			builder.WriteString("\n\n")
 		}
 	}
 
-	// 注入选中表的详细 Schema
-	if len(tables) > 0 {
-		schema, err := h.db.FormatTablesForPrompt(tables)
-		if err != nil {
-			utils.Warn("⚠️  [Agent] 获取表Schema失败: %v", err)
-		} else {
-			builder.WriteString("\n━━━━━ 数据库Schema ━━━━━\n\n")
-			builder.WriteString(schema)
-		}
+	// 注入选中表的详细 Schema（使用预取结果）
+	if len(tables) > 0 && prefetchedSchema != "" {
+		builder.WriteString("\n━━━━━ 数据库Schema ━━━━━\n\n")
+		builder.WriteString(prefetchedSchema)
 	}
 
 	// 构建生成指令
@@ -456,10 +472,9 @@ func (h *AgentQueryHandler) generateSQL(ctx context.Context, question string, do
 
 // ========== 轮次3: 语法+逻辑自检 ==========
 
-func (h *AgentQueryHandler) selfCheckSQL(ctx context.Context, question, sql string, tables []string, conversation *llm.Conversation) (bool, []string, string, error) {
+func (h *AgentQueryHandler) selfCheckSQL(ctx context.Context, question, sql string, tables []string, _ *llm.Conversation) (bool, []string, string, error) {
 	var builder strings.Builder
 
-	builder.WriteString("━━━━━ SQL自检 ━━━━━\n\n")
 	builder.WriteString("你是SQL审查专家。请检查以下SQL的正确性。\n\n")
 	builder.WriteString(fmt.Sprintf("## 原始问题\n%s\n\n", question))
 	builder.WriteString(fmt.Sprintf("## 待审查的SQL\n```sql\n%s\n```\n\n", sql))
@@ -494,16 +509,17 @@ func (h *AgentQueryHandler) selfCheckSQL(ctx context.Context, question, sql stri
 	builder.WriteString("```\n")
 	builder.WriteString("如果SQL完全正确，correct返回true。如果有问题，correct返回false，issues列出问题，fixed_sql给出修正后的完整SQL。\n")
 
-	conversation.AddUser(builder.String())
+	// 使用精简对话：system + 仅自检内容，不携带轮次1/2的完整历史
+	// 这将prompt从~42KB降到~7KB
+	checkConv := llm.NewConversation(h.buildSelfCheckSystemPrompt())
+	checkConv.AddUser(builder.String())
 
-	response, err := h.llmClient.GenerateWithHistory(ctx, conversation.Messages())
+	response, err := h.llmClient.GenerateWithHistory(ctx, checkConv.Messages())
 	if err != nil {
 		return false, nil, "", fmt.Errorf("LLM自检失败: %w", err)
 	}
 
-	conversation.AddAssistant(response)
-
-	// 解析结果
+	// 解析结果（不追加到主对话，保持自检独立）
 	jsonStr := extractJSON(response)
 	if jsonStr == "" {
 		// 无法解析，假设正确
@@ -628,6 +644,12 @@ func (h *AgentQueryHandler) buildSystemPrompt() string {
 - 仔细检查JOIN条件，确保关联字段存在且正确
 - 使用适当的WHERE条件精确查询
 - 不确定的宁可多选表，不要遗漏`
+}
+
+func (h *AgentQueryHandler) buildSelfCheckSystemPrompt() string {
+	return `你是SQL审查专家。你的唯一任务是检查SQL的语法和逻辑正确性。
+只检查以下内容：表名/字段名是否存在、JOIN条件是否正确、WHERE逻辑是否合理。
+只返回JSON格式的检查结果，不要返回其他内容。`
 }
 
 // ========== HandleWithSQL 直接使用SQL查询 ==========
