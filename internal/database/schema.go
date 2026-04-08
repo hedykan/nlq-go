@@ -3,9 +3,12 @@ package database
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"text/template"
 
 	"gorm.io/gorm"
+
+	"github.com/channelwill/nlq/pkg/utils"
 )
 
 // TableSchema 表结构
@@ -54,7 +57,10 @@ func (t TableSchema) String() string {
 
 // SchemaParser Schema解析器
 type SchemaParser struct {
-	db *gorm.DB
+	db               *gorm.DB
+	cache            map[string]*TableDetail // tableName → 缓存的表详情
+	cacheInitialized  bool              // 是否已缓存
+	cacheMu           sync.RWMutex       // 缓存读写锁
 }
 
 // NewSchemaParser 创建Schema解析器
@@ -282,7 +288,7 @@ func (p *SchemaParser) GetTableCount() (int, error) {
 	return int(count), nil
 }
 
-// ========== 两阶段Schema选择支持 ==========
+// GetTableSummaries 获取所有表的摘要信息（阶段1使用）
 
 // TableSummary 表摘要（用于阶段1的轻量级选择）
 type TableSummary struct {
@@ -306,6 +312,98 @@ type TableDetail struct {
 	Columns     []ColumnSchema `json:"columns"`
 	ForeignKeys []ForeignKey   `json:"foreign_keys"`
 	PrimaryKey  string         `json:"primary_key"`
+}
+
+// CacheAllTables 预加载所有表的详情到内存缓存
+// 注意：不再一次性加载全部131张表（MySQL通过SSH隧道写临时文件会OOM）
+// 改为按需缓存：首次查询某张表时自动缓存，后续直接读内存
+func (p *SchemaParser) CacheAllTables() error {
+	// 获取所有表名和注释（轻量查询）
+	type TableInfo struct {
+		TableName    string
+		TableComment string
+	}
+	var tableInfos []TableInfo
+	if err := p.db.Raw(`SELECT table_name, table_comment FROM information_schema.tables WHERE table_schema = ?`,
+		p.db.Migrator().CurrentDatabase()).Scan(&tableInfos).Error; err != nil {
+		return fmt.Errorf("获取表列表失败: %w", err)
+	}
+
+	// 获取所有主键（轻量查询）
+	type PKInfo struct {
+		TableName  string
+		ColumnName string
+	}
+	var pkInfos []PKInfo
+	p.db.Raw(`
+		SELECT table_name, column_name
+		FROM information_schema.key_column_usage
+		WHERE table_schema = ? AND constraint_name = 'PRIMARY'
+	`).Scan(&pkInfos)
+	pkMap := make(map[string]string)
+	for _, pk := range pkInfos {
+		pkMap[pk.TableName] = pk.ColumnName
+	}
+
+	// 获取所有外键（轻量查询）
+	type FkInfo struct {
+		ColumnName       string
+		ReferencedTable  string
+		ReferencedColumn string
+		TableName        string
+	}
+	var fkInfos []FkInfo
+	p.db.Raw(`
+		SELECT
+			kcu.table_name,
+			kcu.column_name,
+			ccu.table_name AS referenced_table,
+			ccu.column_name AS referenced_column
+		FROM information_schema.table_constraints tc
+		JOIN information_schema.key_column_usage kcu
+			ON tc.constraint_name = kcu.constraint_name
+			AND tc.table_schema = kcu.table_schema
+		JOIN information_schema.constraint_column_usage ccu
+			ON ccu.constraint_name = tc.constraint_name
+			AND ccu.table_schema = tc.table_schema
+		WHERE tc.constraint_type = 'FOREIGN KEY'
+			AND tc.table_schema = ?
+	`).Scan(&fkInfos)
+
+	fkMap := make(map[string][]ForeignKey)
+	for _, fk := range fkInfos {
+		fkMap[fk.TableName] = append(fkMap[fk.TableName], ForeignKey{
+			Column:      fk.ColumnName,
+			ReferTable:  fk.ReferencedTable,
+			ReferColumn: fk.ReferencedColumn,
+		})
+	}
+
+	// 预加载表注释和元数据，字段详情按需加载
+	p.cacheMu.Lock()
+	defer p.cacheMu.Unlock()
+	p.cache = make(map[string]*TableDetail, len(tableInfos))
+	for _, info := range tableInfos {
+		pk, _ := pkMap[info.TableName]
+		fks := fkMap[info.TableName]
+		p.cache[info.TableName] = &TableDetail{
+			Name:        info.TableName,
+			Comment:     info.TableComment,
+			Columns:     nil, // 字段按需加载
+			ForeignKeys: fks,
+			PrimaryKey:  pk,
+		}
+	}
+	p.cacheInitialized = true
+	utils.Info("✅ [Schema] 缓存已初始化，共 %d 张表（字段按需加载）", len(tableInfos))
+	return nil
+}
+
+// IsInitialized 检查缓存是否已加载
+func (p *SchemaParser) IsInitialized() bool {
+	p.cacheMu.RLock()
+	defer p.cacheMu.RUnlock()
+	return p.cacheInitialized
 }
 
 // GetTableSummaries 获取所有表的摘要信息（阶段1使用）
@@ -459,7 +557,34 @@ func (p *SchemaParser) extractKeyColumns(detail TableDetail) []string {
 }
 
 // GetTableDetail 获取单个表的详细信息（阶段2使用）
+// 优先从内存缓存读取，字段按需从数据库加载并缓存
 func (p *SchemaParser) GetTableDetail(tableName string) (TableDetail, error) {
+	p.cacheMu.Lock()
+	defer p.cacheMu.Unlock()
+
+	if p.cacheInitialized {
+		if detail, ok := p.cache[tableName]; ok {
+			// 字段按需加载
+			if detail.Columns == nil {
+				p.cacheMu.Unlock()
+				tableSchema, err := p.ParseTable(tableName)
+				p.cacheMu.Lock()
+				if err != nil {
+					return TableDetail{}, err
+				}
+				detail.Columns = tableSchema.Columns
+				p.cache[tableName] = detail
+			}
+			return *detail, nil
+		}
+	}
+
+	// 缓存未初始化，回退到数据库查询
+	return p.getTableDetailFromDB(tableName)
+}
+
+// getTableDetailFromDB 从数据库获取表详情（缓存未命中时的回退）
+func (p *SchemaParser) getTableDetailFromDB(tableName string) (TableDetail, error) {
 	// 获取基本表结构
 	tableSchema, err := p.ParseTable(tableName)
 	if err != nil {

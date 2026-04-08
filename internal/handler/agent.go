@@ -110,6 +110,15 @@ func (h *AgentQueryHandler) HandleWithProgress(ctx context.Context, question str
 	utils.Info("🤖 [Agent] 开始处理: %s", question)
 	utils.Info("🤖 [Agent] 配置: maxSelfCorrect=%d, maxTurns=%d", h.config.MaxSelfCorrect, h.config.MaxTurns)
 
+	// 启动时自动加载Schema缓存（只执行一次，后续查询全部走内存）
+	if !h.db.IsInitialized() {
+		cacheStart := time.Now()
+		if err := h.db.CacheAllTables(); err != nil {
+			utils.Warn("⚠️  [Agent] Schema缓存失败（非致命）: %v", err)
+		}
+		utils.Info("🤖 [Agent] Schema缓存耗时: %v", time.Since(cacheStart))
+	}
+
 	// ========== 初始化对话 ==========
 	systemPrompt := h.buildSystemPrompt()
 	conversation := llm.NewConversation(systemPrompt)
