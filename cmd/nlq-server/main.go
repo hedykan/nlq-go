@@ -127,7 +127,12 @@ func buildKnowledgeRouter() *knowledge.Router {
 	for _, dir := range knowledgeDirs {
 		docsBefore := router.GetIndexCount()
 		if err := router.BuildIndex(dir); err != nil {
-			fmt.Printf("  ⚠️  跳过知识库目录 %s: %v\n", dir, err)
+			// 目录不存在时静默跳过（positive/negative 是可选目录，首次运行时不存在）
+			if os.IsNotExist(err) {
+				fmt.Printf("  ⏭️  跳过（目录不存在） %s\n", dir)
+			} else {
+				fmt.Printf("  ⚠️  跳过知识库目录 %s: %v\n", dir, err)
+			}
 			continue
 		}
 		docsAfter := router.GetIndexCount()
