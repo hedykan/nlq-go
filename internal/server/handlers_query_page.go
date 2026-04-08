@@ -404,6 +404,165 @@ func (h *QueryPageHandler) generateQueryPageHTML() string {
             font-style: italic;
         }
 
+        /* 思考过程面板样式 */
+        .thinking-panel {
+            display: none;
+            margin: 15px 0;
+            border: 1px solid #e8eaf6;
+            border-radius: 10px;
+            background: #fafbff;
+            overflow: hidden;
+        }
+        .thinking-panel.show { display: block; }
+        .thinking-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            background: #eef0ff;
+            cursor: pointer;
+            user-select: none;
+        }
+        .thinking-header:hover { background: #e4e7ff; }
+        .thinking-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #3f51b5;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .thinking-toggle {
+            font-size: 12px;
+            color: #7986cb;
+            transition: transform 0.3s;
+        }
+        .thinking-toggle.collapsed { transform: rotate(-90deg); }
+        .thinking-body { padding: 0; }
+        .thinking-body.collapsed { display: none; }
+        .step-item {
+            padding: 12px 16px;
+            border-bottom: 1px solid #eef0ff;
+            position: relative;
+        }
+        .step-item:last-child { border-bottom: none; }
+        .step-item.active { background: #e8eaff; }
+        .step-item.active::before {
+            content: '';
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            width: 3px;
+            background: #3f51b5;
+            animation: stepPulse 1.5s infinite;
+        }
+        @keyframes stepPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+        .step-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 6px;
+        }
+        .step-label {
+            font-size: 13px;
+            font-weight: 600;
+            color: #283593;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .step-status {
+            font-size: 12px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-weight: 500;
+        }
+        .step-status.done { background: #e8f5e9; color: #2e7d32; }
+        .step-status.running { background: #fff3e0; color: #e65100; }
+        .step-status.warning { background: #fff8e1; color: #f57f17; }
+        .step-detail {
+            font-size: 13px;
+            color: #5c6bc0;
+            line-height: 1.6;
+            min-height: 1.2em;
+        }
+        .step-detail .cursor {
+            display: inline-block;
+            width: 2px;
+            height: 1em;
+            background: #3f51b5;
+            margin-left: 1px;
+            animation: blink 0.8s infinite;
+            vertical-align: text-bottom;
+        }
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+        .step-meta {
+            margin-top: 6px;
+            font-size: 12px;
+            color: #9fa8da;
+        }
+        .step-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 6px;
+        }
+        .step-tag {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            background: #e8eaf6;
+            color: #3949ab;
+        }
+        .step-tag.doc {
+            background: #fce4ec;
+            color: #c62828;
+        }
+        .step-tag.table {
+            background: #e0f2f1;
+            color: #00695c;
+        }
+        .step-tag.sql {
+            background: #e8f5e9;
+            color: #1b5e20;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 11px;
+        }
+        .step-tag.issue {
+            background: #fff3e0;
+            color: #e65100;
+        }
+        .step-reasoning {
+            margin-top: 8px;
+            padding: 10px 12px;
+            background: #f5f5ff;
+            border-radius: 6px;
+            border-left: 3px solid #7986cb;
+            font-size: 12px;
+            color: #5c6bc0;
+            line-height: 1.6;
+            max-height: 120px;
+            overflow-y: auto;
+        }
+        .step-sql-preview {
+            margin-top: 8px;
+            padding: 10px 12px;
+            background: #263238;
+            border-radius: 6px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 12px;
+            color: #a5d6ff;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            overflow-x: auto;
+        }
+
         /* 响应式设计 */
         @media (max-width: 600px) {
             .container { padding: 20px; }
@@ -465,19 +624,26 @@ func (h *QueryPageHandler) generateQueryPageHTML() string {
             <div>AI正在思考中，请稍候...</div>
         </div>
 
-        <!-- 流式思考过程 -->
-        <div class="loading" id="streamProgress" style="display: none;">
-            <div style="font-size: 48px; margin-bottom: 10px;">🤖</div>
-            <div id="streamStatus">正在初始化...</div>
+        <!-- 流式思考过程面板 -->
+        <div class="thinking-panel" id="thinkingPanel">
+            <div class="thinking-header" onclick="toggleThinkingPanel()">
+                <div class="thinking-title">
+                    <span>🧠</span>
+                    <span>思考过程</span>
+                    <span id="thinkingStepCount"></span>
+                </div>
+                <span class="thinking-toggle" id="thinkingToggle">▼</span>
+            </div>
+            <div class="thinking-body" id="thinkingBody"></div>
+        </div>
 
-            <!-- 进度条 -->
-            <div class="progress-bar-container" style="max-width: 300px; margin: 15px auto;">
+        <!-- 流式进度（简化为进度条） -->
+        <div id="streamProgress" style="display: none; text-align: center; padding: 10px 0;">
+            <div class="progress-bar-container" style="max-width: 300px; margin: 0 auto;">
                 <div class="progress-bar" id="streamProgressBar">
                     <span class="progress-bar-text" id="streamProgressText">0%</span>
                 </div>
             </div>
-
-            <pre id="streamSQL" style="margin-top: 15px; font-family: 'Monaco', 'Menlo', monospace; font-size: 14px; color: #2c3e50; white-space: pre-wrap; word-wrap: break-word; text-align: left;"></pre>
         </div>
 
         <!-- 错误提示 -->
@@ -608,6 +774,7 @@ func (h *QueryPageHandler) generateQueryPageHTML() string {
         function clearQuery() {
             document.getElementById('question').value = '';
             document.getElementById('question').focus();
+            resetThinkingPanel();
         }
 
         // 新查询
@@ -887,66 +1054,279 @@ func (h *QueryPageHandler) generateQueryPageHTML() string {
             }
         }
 
+        // ========== 思考过程面板 ==========
+        let thinkingSteps = [];      // 所有步骤数据
+        let typingTimers = [];       // 逐字打印定时器
+        let currentStepId = -1;      // 当前正在打印的步骤索引
+
+        // 步骤图标和标签映射
+        const stepConfig = {
+            resource_selection: { icon: '📋', label: '资源选择' },
+            sql_generation:     { icon: '⚡', label: 'SQL生成' },
+            self_check:         { icon: '✅', label: '自检审查' },
+            self_correction:    { icon: '🔧', label: '自检修正' },
+            execution:          { icon: '🚀', label: '执行查询' },
+            error_correction:   { icon: '🛠️', label: '错误修正' },
+        };
+
+        // 折叠/展开思考面板
+        function toggleThinkingPanel() {
+            const body = document.getElementById('thinkingBody');
+            const toggle = document.getElementById('thinkingToggle');
+            body.classList.toggle('collapsed');
+            toggle.classList.toggle('collapsed');
+        }
+
+        // 重置思考面板
+        function resetThinkingPanel() {
+            thinkingSteps = [];
+            currentStepId = -1;
+            typingTimers.forEach(t => clearInterval(t));
+            typingTimers = [];
+            document.getElementById('thinkingBody').innerHTML = '';
+            document.getElementById('thinkingBody').classList.remove('collapsed');
+            document.getElementById('thinkingToggle').classList.remove('collapsed');
+            document.getElementById('thinkingStepCount').textContent = '';
+            document.getElementById('thinkingPanel').classList.remove('show');
+        }
+
+        // 处理SSE步骤事件
+        function handleThinkingStep(data) {
+            const panel = document.getElementById('thinkingPanel');
+            panel.classList.add('show');
+
+            const action = data.action || 'unknown';
+            const cfg = stepConfig[action] || { icon: '📌', label: action };
+            const isUpdate = data.duration_ms > 0; // 有duration说明是完成事件
+
+            // 查找是否已有同action的步骤
+            let existingIdx = -1;
+            for (let i = 0; i < thinkingSteps.length; i++) {
+                if (thinkingSteps[i].action === action) {
+                    existingIdx = i;
+                    break;
+                }
+            }
+
+            if (existingIdx >= 0 && isUpdate) {
+                // 更新已有步骤（标记完成）
+                updateStepItem(existingIdx, data, cfg);
+            } else if (existingIdx < 0) {
+                // 新步骤
+                addStepItem(data, cfg);
+            }
+        }
+
+        // 添加新步骤
+        function addStepItem(data, cfg) {
+            const idx = thinkingSteps.length;
+            thinkingSteps.push({ action: data.action, element: null });
+
+            const body = document.getElementById('thinkingBody');
+            const div = document.createElement('div');
+            div.className = 'step-item active';
+            div.id = 'step-' + idx;
+
+            div.innerHTML = '<div class="step-header">'
+                + '<div class="step-label">' + cfg.icon + ' ' + cfg.label + '</div>'
+                + '<span class="step-status running">⏳ 进行中</span>'
+                + '</div>'
+                + '<div class="step-detail" id="stepDetail-' + idx + '"><span class="cursor"></span></div>'
+                + '<div class="step-tags" id="stepTags-' + idx + '"></div>';
+            body.appendChild(div);
+
+            thinkingSteps[idx].element = div;
+
+            // 逐字打印 detail
+            typeText('stepDetail-' + idx, data.message || data.detail || '', 25);
+
+            // 更新步骤计数
+            document.getElementById('thinkingStepCount').textContent = '(' + thinkingSteps.length + '步)';
+
+            // 滚动到当前步骤
+            div.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        // 更新步骤（完成状态）
+        function updateStepItem(idx, data, cfg) {
+            const div = document.getElementById('step-' + idx);
+            if (!div) return;
+
+            div.classList.remove('active');
+
+            // 更新状态标签
+            const statusEl = div.querySelector('.step-status');
+            const isWarning = data.action === 'self_correction' || data.action === 'error_correction';
+            statusEl.className = 'step-status ' + (isWarning ? 'warning' : 'done');
+            statusEl.textContent = isWarning ? '⚠️ 已修正' : '✅ 完成';
+
+            // 更新耗时
+            if (data.duration_ms) {
+                let metaEl = div.querySelector('.step-meta');
+                if (!metaEl) {
+                    metaEl = document.createElement('div');
+                    metaEl.className = 'step-meta';
+                    div.appendChild(metaEl);
+                }
+                metaEl.textContent = '⏱ ' + (data.duration_ms / 1000).toFixed(1) + 's';
+            }
+
+            // 显示tags和详情
+            const tagsEl = document.getElementById('stepTags-' + idx);
+            if (tagsEl && data.data) {
+                renderStepTags(tagsEl, data.action, data.data);
+            }
+
+            // 如果有 detail/message 更新（完成时的最终描述）
+            if (data.message || data.detail) {
+                const detailEl = document.getElementById('stepDetail-' + idx);
+                if (detailEl) {
+                    // 跳过打印，直接设置完整文本
+                    const text = data.message || data.detail;
+                    detailEl.textContent = text;
+                }
+            }
+        }
+
+        // 渲染步骤标签（文档、表、SQL等）
+        function renderStepTags(container, action, data) {
+            container.innerHTML = '';
+
+            // 选择的文档
+            if (data.selected_docs && data.selected_docs.length > 0) {
+                data.selected_docs.forEach(doc => {
+                    const tag = document.createElement('span');
+                    tag.className = 'step-tag doc';
+                    tag.textContent = '📄 ' + doc;
+                    container.appendChild(tag);
+                });
+            }
+
+            // 选择的表
+            if (data.selected_tables && data.selected_tables.length > 0) {
+                data.selected_tables.forEach(table => {
+                    const tag = document.createElement('span');
+                    tag.className = 'step-tag table';
+                    tag.textContent = '🗃️ ' + table;
+                    container.appendChild(tag);
+                });
+            }
+
+            // 生成的SQL
+            if (data.sql) {
+                const sqlDiv = document.createElement('div');
+                sqlDiv.className = 'step-sql-preview';
+                sqlDiv.textContent = data.sql;
+                container.appendChild(sqlDiv);
+            }
+
+            // 推理过程
+            if (data.reasoning) {
+                const reasonDiv = document.createElement('div');
+                reasonDiv.className = 'step-reasoning';
+                reasonDiv.textContent = data.reasoning;
+                container.appendChild(reasonDiv);
+            }
+
+            // 自检问题
+            if (data.issues && data.issues.length > 0) {
+                data.issues.forEach(issue => {
+                    const tag = document.createElement('span');
+                    tag.className = 'step-tag issue';
+                    tag.textContent = '⚠️ ' + issue;
+                    container.appendChild(tag);
+                });
+            }
+
+            // 修正后的SQL
+            if (data.fixed_sql) {
+                const sqlDiv = document.createElement('div');
+                sqlDiv.className = 'step-sql-preview';
+                sqlDiv.textContent = '修正后: ' + data.fixed_sql;
+                container.appendChild(sqlDiv);
+            }
+        }
+
+        // 逐字打印效果
+        function typeText(elementId, text, speed) {
+            const el = document.getElementById(elementId);
+            if (!el || !text) return;
+
+            let charIdx = 0;
+            el.textContent = '';
+            el.innerHTML = '<span class="cursor"></span>';
+
+            const timer = setInterval(() => {
+                if (charIdx < text.length) {
+                    el.innerHTML = escapeHtml(text.substring(0, charIdx + 1)) + '<span class="cursor"></span>';
+                    charIdx++;
+                } else {
+                    el.innerHTML = escapeHtml(text);
+                    clearInterval(timer);
+                    // 从timers数组中移除
+                    const tIdx = typingTimers.indexOf(timer);
+                    if (tIdx > -1) typingTimers.splice(tIdx, 1);
+                }
+            }, speed);
+
+            typingTimers.push(timer);
+        }
+
+        // 完成所有步骤的逐字打印（立即显示完整文本）
+        function finishAllTyping() {
+            typingTimers.forEach(t => clearInterval(t));
+            typingTimers = [];
+            thinkingSteps.forEach((step, idx) => {
+                const detailEl = document.getElementById('stepDetail-' + idx);
+                if (detailEl) {
+                    // 移除cursor，保留纯文本
+                    detailEl.textContent = detailEl.textContent.replace(/\u200b/g, '');
+                }
+            });
+        }
+
+        // HTML转义
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
         // 流式查询
         function streamQuery(question) {
-            // 显示流式进度
+            // 重置状态
+            resetThinkingPanel();
             document.getElementById('loading').style.display = 'none';
             document.getElementById('streamProgress').style.display = 'block';
-            document.getElementById('streamStatus').textContent = '正在连接...';
             document.getElementById('streamProgressBar').style.width = '0%';
             document.getElementById('streamProgressText').textContent = '0%';
-            document.getElementById('streamSQL').textContent = '';
-            document.getElementById('streamSQL').style.display = 'none'; // 初始隐藏SQL区域
 
             // 构建SSE URL
             const sseUrl = '/api/v1/stream-query?question=' + encodeURIComponent(question);
-
-            // 创建EventSource
             const eventSource = new EventSource(sseUrl);
-
-            let sqlBuffer = '';
 
             // 监听开始事件
             eventSource.addEventListener('start', (e) => {
-                const data = JSON.parse(e.data);
-                console.log('流式查询开始:', data);
+                console.log('流式查询开始:', JSON.parse(e.data));
             });
 
-            // 监听思考事件
+            // 监听思考事件（核心：展示思考步骤）
             eventSource.addEventListener('thinking', (e) => {
                 const data = JSON.parse(e.data);
-                document.getElementById('streamStatus').textContent = '🤖 ' + data.message;
+                handleThinkingStep(data);
                 if (data.progress) {
-                    const progress = data.progress;
-                    document.getElementById('streamProgressBar').style.width = progress + '%';
-                    document.getElementById('streamProgressText').textContent = progress + '%';
-                }
-                // 根据阶段显示/隐藏SQL区域
-                if (data.phase === 'sql_generation') {
-                    document.getElementById('streamSQL').style.display = 'block';
-                } else if (data.phase === 'table_selection') {
-                    document.getElementById('streamSQL').style.display = 'none';
+                    document.getElementById('streamProgressBar').style.width = data.progress + '%';
+                    document.getElementById('streamProgressText').textContent = data.progress + '%';
                 }
             });
 
-            // 监听进度事件
+            // 监听进度事件（错误修正等）
             eventSource.addEventListener('progress', (e) => {
                 const data = JSON.parse(e.data);
-                if (data.delta) {
-                    sqlBuffer += data.delta;
-                    document.getElementById('streamSQL').textContent = sqlBuffer;
-                    document.getElementById('streamSQL').style.display = 'block';
-                }
+                handleThinkingStep(data);
                 if (data.progress) {
-                    const progress = data.progress;
-                    document.getElementById('streamProgressBar').style.width = progress + '%';
-                    document.getElementById('streamProgressText').textContent = progress + '%';
-                }
-                // 根据阶段显示/隐藏SQL区域
-                if (data.phase === 'sql_generation') {
-                    document.getElementById('streamSQL').style.display = 'block';
-                } else if (data.phase === 'table_selection') {
-                    document.getElementById('streamSQL').style.display = 'none';
+                    document.getElementById('streamProgressBar').style.width = data.progress + '%';
+                    document.getElementById('streamProgressText').textContent = data.progress + '%';
                 }
             });
 
@@ -954,11 +1334,12 @@ func (h *QueryPageHandler) generateQueryPageHTML() string {
             eventSource.addEventListener('result', (e) => {
                 const data = JSON.parse(e.data);
                 console.log('流式查询完成:', data);
-
-                // 关闭SSE连接
                 eventSource.close();
 
-                // 隐藏流式进度
+                // 完成所有逐字打印
+                finishAllTyping();
+
+                // 隐藏进度条
                 document.getElementById('streamProgress').style.display = 'none';
 
                 // 显示最终结果
@@ -969,14 +1350,11 @@ func (h *QueryPageHandler) generateQueryPageHTML() string {
             eventSource.addEventListener('error', (e) => {
                 console.error('流式查询错误:', e);
                 eventSource.close();
-
-                // 隐藏流式进度
+                finishAllTyping();
                 document.getElementById('streamProgress').style.display = 'none';
-
                 showError('查询失败，请重试');
             });
 
-            // 保存eventSource引用（用于后续可能的取消操作）
             window.currentEventSource = eventSource;
         }
 

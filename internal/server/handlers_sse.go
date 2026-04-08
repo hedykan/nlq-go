@@ -81,13 +81,17 @@ func (h *SSEHandler) handleAgentStreamQuery(w http.ResponseWriter, r *http.Reque
 			eventType = "thinking"
 		}
 
-		h.sendSSEEvent(w, flusher, eventType, map[string]interface{}{
+		eventData := map[string]interface{}{
 			"turn":     step.Turn,
 			"action":   step.Action,
 			"message":  step.Detail,
 			"progress": turnToProgress(step.Turn, step.Action),
 			"data":     step.Data,
-		})
+		}
+		if step.Duration > 0 {
+			eventData["duration_ms"] = step.Duration.Milliseconds()
+		}
+		h.sendSSEEvent(w, flusher, eventType, eventData)
 		if flusher != nil {
 			flusher.Flush()
 		}
