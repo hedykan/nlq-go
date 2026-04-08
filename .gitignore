@@ -6,6 +6,8 @@
 *.dylib
 bin/
 dist/
+nlq-server
+nlq
 knowledge/
 
 # Test binary, built with `go test -c`
